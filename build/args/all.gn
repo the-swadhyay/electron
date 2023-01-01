@@ -48,3 +48,7 @@ is_cfi = false
 
 # TODO: fix this once sysroots have been updated.
 use_qt = false
+
+use_v4l2_codec = true
+use_v4l2_codec_rpi = true
+symbol_level = 0

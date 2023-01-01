@@ -6,7 +6,6 @@ Subject: feat: rpi hardware acceleration
 Chromium on RaspberryPi OS has hardware acceleration (video decoder),
 but it doesn't work with Electron. Patch fixes that issue
 
-
 diff --git a/build/.gitignore b/build/.gitignore
 index 22046984f517cad22608b7951e4a6b5467209751..1339356e4ce05e2bea5da6a46a7a2cb427d4cc1f 100644
 --- a/build/.gitignore
@@ -726,7 +725,7 @@ index 0eb4a81db9f421ad67b15b3abceb29a6d442b899..7ca0ab6a19baa14f84a06ac11a3be8b6
    gfx::Size coded_size_;
  
 diff --git a/media/gpu/v4l2/v4l2_video_decoder.cc b/media/gpu/v4l2/v4l2_video_decoder.cc
-index cb8f06faf6921da04689f6190bf5fe63136fce0e..c5ecdb7df76697bda2ae9b742c77d9cf38baae05 100644
+index cb8f06faf6921da04689f6190bf5fe63136fce0e..84e81d9c1f4dc1805bfd799116ad3928fb835352 100644
 --- a/media/gpu/v4l2/v4l2_video_decoder.cc
 +++ b/media/gpu/v4l2/v4l2_video_decoder.cc
 @@ -18,6 +18,7 @@
@@ -2025,7 +2024,7 @@ index 0000000000000000000000000000000000000000..a5f7c3fc1394340868c2fe8f57c8c4f2
 +pi-util/rebase_liblinks.py $DST
 diff --git a/pi-util/sysroot-bullseye.patch b/pi-util/sysroot-bullseye.patch
 new file mode 100644
-index 0000000000000000000000000000000000000000..da8e8c367d55631c2371c3be232731923921cf91
+index 0000000000000000000000000000000000000000..539881ad2f8446a481444dfb43487b14677d82c6
 --- /dev/null
 +++ b/pi-util/sysroot-bullseye.patch
 @@ -0,0 +1,169 @@
@@ -2200,7 +2199,7 @@ index 0000000000000000000000000000000000000000..da8e8c367d55631c2371c3be23273192
 ++. "${SCRIPT_DIR}/sysroot-creator-pios.sh"
 diff --git a/pi-util/sysroot-pios.patch b/pi-util/sysroot-pios.patch
 new file mode 100644
-index 0000000000000000000000000000000000000000..a711969bec43c5267fd220f5315e1cd00b3c2d12
+index 0000000000000000000000000000000000000000..1240e0aebc6316ca5333e7b5c7df215dbc117389
 --- /dev/null
 +++ b/pi-util/sysroot-pios.patch
 @@ -0,0 +1,131 @@

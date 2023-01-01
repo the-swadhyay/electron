@@ -1,0 +1,181 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ubuntu <ubuntu@ip-172-31-0-175.ap-south-1.compute.internal>
+Date: Sun, 1 Jan 2023 10:33:00 +0000
+Subject: feat: rpi hardware acceleration - additional fixes
+
+earlier patch had few build time errors, which have been resolved with this
+
+diff --git a/media/gpu/chromeos/image_processor_factory.cc b/media/gpu/chromeos/image_processor_factory.cc
+index f44dd98bb901a344099d59c063a99a116050e4c5..8fcc9fe404344aca1c5d8587737d0e3a29e5967f 100644
+--- a/media/gpu/chromeos/image_processor_factory.cc
++++ b/media/gpu/chromeos/image_processor_factory.cc
+@@ -162,40 +162,6 @@ std::unique_ptr<ImageProcessor> CreateV4L2ImageProcessorWithInputCandidates(
+   return nullptr;
+ }
+ 
+-std::unique_ptr<ImageProcessor> CreateLibYUVImageProcessorWithInputCandidates(
+-    const std::vector<PixelLayoutCandidate>& input_candidates,
+-    const gfx::Rect& input_visible_rect,
+-    const gfx::Size& output_size,
+-    size_t num_buffers,
+-    scoped_refptr<base::SequencedTaskRunner> client_task_runner,
+-    ImageProcessorFactory::PickFormatCB out_format_picker,
+-    ImageProcessor::ErrorCB error_cb) {
+-  if (input_candidates.size() != 1)
+-    return nullptr;
+-
+-  if (input_candidates[0].fourcc != Fourcc(Fourcc::MM21))
+-    return nullptr;
+-
+-  std::vector<Fourcc> supported_output_formats =
+-      LibYUVImageProcessorBackend::GetSupportedOutputFormats(
+-          Fourcc(Fourcc::MM21));
+-  auto output_format =
+-      out_format_picker.Run(supported_output_formats, Fourcc(Fourcc::NV12));
+-
+-  if (!output_format)
+-    return nullptr;
+-
+-  ImageProcessor::PortConfig input_config(
+-      Fourcc(Fourcc::MM21), input_candidates[0].size, /*planes=*/{},
+-      input_visible_rect, {VideoFrame::STORAGE_DMABUFS});
+-  ImageProcessor::PortConfig output_config(
+-      *output_format, output_size, /*planes=*/{}, gfx::Rect(output_size),
+-      {VideoFrame::STORAGE_GPU_MEMORY_BUFFER});
+-  return ImageProcessor::Create(
+-      base::BindRepeating(&LibYUVImageProcessorBackend::Create), input_config,
+-      output_config, ImageProcessor::OutputMode::IMPORT, VIDEO_ROTATION_0,
+-      std::move(error_cb), std::move(client_task_runner));
+-}
+ #endif  // BUILDFLAG(USE_V4L2_CODEC) && !BUILDFLAG(USE_VAAPI)
+ 
+ }  // namespace
+@@ -248,13 +214,6 @@ ImageProcessorFactory::CreateWithInputCandidates(
+   if (processor)
+     return processor;
+ #elif BUILDFLAG(USE_V4L2_CODEC)
+-  if (base::FeatureList::IsEnabled(media::kPreferLibYuvImageProcessor)) {
+-    auto processor = CreateLibYUVImageProcessorWithInputCandidates(
+-        input_candidates, input_visible_rect, output_size, num_buffers,
+-        client_task_runner, out_format_picker, error_cb);
+-    if (processor)
+-      return processor;
+-  }
+   auto processor = CreateV4L2ImageProcessorWithInputCandidates(
+       input_candidates, input_visible_rect, num_buffers, client_task_runner,
+       out_format_picker, error_cb);
+diff --git a/media/gpu/v4l2/BUILD.gn b/media/gpu/v4l2/BUILD.gn
+index d1c3ecc82793482c9d1ecd6e8e5d6060a661b3ea..7b8e4de4c658ffea11f884379c0c1e65146c7c07 100644
+--- a/media/gpu/v4l2/BUILD.gn
++++ b/media/gpu/v4l2/BUILD.gn
+@@ -27,9 +27,6 @@ source_set("v4l2") {
+     "buffer_affinity_tracker.h",
+     "generic_v4l2_device.cc",
+     "generic_v4l2_device.h",
+-    "v4l2_decode_surface.cc",
+-    "v4l2_decode_surface.h",
+-    "v4l2_decode_surface_handler.h",
+     "v4l2_device.cc",
+     "v4l2_device.h",
+     "v4l2_device_poller.cc",
+@@ -38,8 +35,6 @@ source_set("v4l2") {
+     "v4l2_framerate_control.h",
+     "v4l2_image_processor_backend.cc",
+     "v4l2_image_processor_backend.h",
+-    "v4l2_slice_video_decode_accelerator.cc",
+-    "v4l2_slice_video_decode_accelerator.h",
+     "v4l2_stateful_workaround.cc",
+     "v4l2_stateful_workaround.h",
+     "v4l2_utils.cc",
+@@ -53,9 +48,7 @@ source_set("v4l2") {
+     "v4l2_video_decoder_backend.cc",
+     "v4l2_video_decoder_backend.h",
+     "v4l2_video_decoder_backend_stateful.cc",
+-    "v4l2_video_decoder_backend_stateful.h",
+-    "v4l2_video_decoder_delegate_av1.cc",
+-    "v4l2_video_decoder_delegate_av1.h"
++    "v4l2_video_decoder_backend_stateful.h"
+   ]
+ 
+   if (!use_v4l2_codec_rpi) {
+@@ -83,6 +76,8 @@ source_set("v4l2") {
+       "v4l2_video_decoder_delegate_vp9_chromium.h",
+       "v4l2_video_decoder_delegate_vp9_legacy.cc",
+       "v4l2_video_decoder_delegate_vp9_legacy.h",
++      "v4l2_video_decoder_delegate_av1.cc",
++      "v4l2_video_decoder_delegate_av1.h"
+     ]
+   }
+ 
+diff --git a/media/gpu/v4l2/v4l2_device.cc b/media/gpu/v4l2/v4l2_device.cc
+index 6f1b5ecf31a8152e42b3205736c2d78fe11aeeb9..6b54e2ac7788eed73d8b21426875fccb05cc8ce5 100644
+--- a/media/gpu/v4l2/v4l2_device.cc
++++ b/media/gpu/v4l2/v4l2_device.cc
+@@ -1608,10 +1608,9 @@ uint32_t V4L2Device::VideoCodecProfileToV4L2PixFmt(VideoCodecProfile profile,
+ #endif
+     else
+       return V4L2_PIX_FMT_VP9;
+-  } else {
+-    DVLOGF(1) << "Unsupported profile: " << GetProfileName(profile);
+-    return 0;
+   }
++  LOG(ERROR) << "Unknown profile: " << GetProfileName(profile);
++  return 0;
+ }
+ 
+ namespace {
+diff --git a/media/gpu/v4l2/v4l2_device.h b/media/gpu/v4l2/v4l2_device.h
+index 137ec72ef57df199b799bb990c21674db2fb52dc..f346bab954be14f84b5d9e09946ad75c0b718c06 100644
+--- a/media/gpu/v4l2/v4l2_device.h
++++ b/media/gpu/v4l2/v4l2_device.h
+@@ -516,9 +516,10 @@ class MEDIA_GPU_EXPORT V4L2Queue
+ 
+   SEQUENCE_CHECKER(sequence_checker_);
+ 
++  bool incoherent_ = false;
++
+   base::WeakPtrFactory<V4L2Queue> weak_this_factory_;
+ 
+-  bool incoherent_ = false;
+ };
+ 
+ #if !BUILDFLAG(USE_V4L2_CODEC_RPI)
+@@ -542,7 +543,6 @@ class MEDIA_GPU_EXPORT V4L2RequestRefBase {
+ 
+   SEQUENCE_CHECKER(sequence_checker_);
+ };
+-#endif
+ 
+ class V4L2SubmittedRequestRef;
+ 
+@@ -640,6 +640,7 @@ class MEDIA_GPU_EXPORT V4L2RequestsQueue {
+ 
+   SEQUENCE_CHECKER(sequence_checker_);
+ };
++#endif
+ 
+ class MEDIA_GPU_EXPORT V4L2Device
+     : public base::RefCountedThreadSafe<V4L2Device> {
+diff --git a/media/gpu/v4l2/v4l2_video_decoder.h b/media/gpu/v4l2/v4l2_video_decoder.h
+index ef7a6a431a806298e529ed3c27938f28b0e17090..92f563380d4bfb1c398b843b813a239bf5e6fad1 100644
+--- a/media/gpu/v4l2/v4l2_video_decoder.h
++++ b/media/gpu/v4l2/v4l2_video_decoder.h
+@@ -213,14 +213,15 @@ class MEDIA_GPU_EXPORT V4L2VideoDecoder
+ 
+   SEQUENCE_CHECKER(decoder_sequence_checker_);
+ 
++  // Whether or not our V4L2Queues should be requested with
++  // V4L2_MEMORY_FLAG_NON_COHERENT
++  bool incoherent_ = false;
++
+   // |weak_this_for_polling_| must be dereferenced and invalidated on
+   // |decoder_task_runner_|.
+   base::WeakPtr<V4L2VideoDecoder> weak_this_for_polling_;
+   base::WeakPtrFactory<V4L2VideoDecoder> weak_this_for_polling_factory_;
+ 
+-  // Whether or not our V4L2Queues should be requested with
+-  // V4L2_MEMORY_FLAG_NON_COHERENT
+-  bool incoherent_ = false;
+ };
+ 
+ }  // namespace media

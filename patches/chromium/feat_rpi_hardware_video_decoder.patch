@@ -1,0 +1,2460 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Ubuntu <ubuntu@ip-172-31-0-175.ap-south-1.compute.internal>
+Date: Sun, 1 Jan 2023 16:46:56 +0000
+Subject: feat: rpi hardware video decoder
+
+On Raspberry Pi 4B hardware video decoder doesn't work; while it works on the default Chromium supplied with the Raspbian OS.
+Same patch is applied as applied by RaspberrryPi Official Git Repo has for Chromium
+
+diff --git a/build/.gitignore b/build/.gitignore
+index 22046984f517cad22608b7951e4a6b5467209751..1339356e4ce05e2bea5da6a46a7a2cb427d4cc1f 100644
+--- a/build/.gitignore
++++ b/build/.gitignore
+@@ -23,6 +23,12 @@ ciopfs
+ /x64/
+ /linux/debian_*-sysroot/
+ /linux/ubuntu_*-sysroot/
++# We've built anything with pios in the name
++/linux/pios_*-sysroot/
++/linux/sysroot_scripts/*pios*
++/linux/sysroot_scripts/generated_package_lists/buster.*
++/linux/sysroot_scripts/generated_package_lists/bullseye.*
++
+ /ios_files
+ /mac_files
+ 
+diff --git a/build/config/linux/BUILD.gn b/build/config/linux/BUILD.gn
+index 131bb71d1d3b81f993bc90d4be3382d7ddc5dd60..3a4d779ba09802165d53273b6453ffb01a64fa11 100644
+--- a/build/config/linux/BUILD.gn
++++ b/build/config/linux/BUILD.gn
+@@ -5,6 +5,7 @@
+ import("//build/config/c++/c++.gni")
+ import("//build/config/chromeos/ui_mode.gni")
+ import("//build/config/linux/pkg_config.gni")
++import("//build/config/sysroot.gni")
+ import("//build/config/ui.gni")
+ 
+ group("linux") {
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+index 81002cd0069d8f3012b68f93b632ac6254b80494..c29da104efcdef0cd6043dfcd84feb78ed033a46 100644
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -74,6 +74,7 @@
+ #include "components/nacl/common/buildflags.h"
+ #include "components/services/heap_profiling/public/cpp/profiling_client.h"
+ #include "components/startup_metric_utils/browser/startup_metric_utils.h"
++#include "components/version_info/pi_patch_version_info.h"
+ #include "components/version_info/channel.h"
+ #include "components/version_info/version_info.h"
+ #include "content/public/app/initialize_mojo_core.h"
+@@ -423,6 +424,16 @@ bool HandleVersionSwitches(const base::CommandLine& command_line) {
+   }
+ #endif
+ 
++  if (command_line.HasSwitch(switches::kPiPatchVersion)) {
++    printf("%s %s %s\nPi patch: %s\n",
++           version_info::GetProductName().c_str(),
++           version_info::GetVersionNumber().c_str(),
++           chrome::GetChannelName(chrome::WithExtendedStable(true)).c_str(),
++           version_info::GetPiPatchVersionString().c_str());
++    return true;
++  }
++
++
+   if (command_line.HasSwitch(switches::kVersion)) {
+     printf("%s %s %s\n", version_info::GetProductName().c_str(),
+            version_info::GetVersionNumber().c_str(),
+diff --git a/chrome/common/chrome_switches.cc b/chrome/common/chrome_switches.cc
+index 6e27bd00c3554ee9af3554411a2d69a107f87a17..53da7dbad001310e52250983ab073bf9f65b2ee9 100644
+--- a/chrome/common/chrome_switches.cc
++++ b/chrome/common/chrome_switches.cc
+@@ -439,6 +439,9 @@ const char kPackExtension[] = "pack-extension";
+ // Optional PEM private key to use in signing packaged .crx.
+ const char kPackExtensionKey[] = "pack-extension-key";
+ 
++// Print the patch version and return
++const char kPiPatchVersion[] = "pi-patch-version";
++
+ // Causes the browser process to crash very early in startup, just before
+ // crashpad (or breakpad) is initialized.
+ const char kPreCrashpadCrashTest[] = "pre-crashpad-crash-test";
+diff --git a/chrome/common/chrome_switches.h b/chrome/common/chrome_switches.h
+index 36ce0639798707aa3bb6edaa2678ea48de39d914..3fc4ff03e5d56a931189574131211cde8c3aad7f 100644
+--- a/chrome/common/chrome_switches.h
++++ b/chrome/common/chrome_switches.h
+@@ -142,6 +142,7 @@ extern const char kOnTheFlyMhtmlHashComputation[];
+ extern const char kOpenInNewWindow[];
+ extern const char kPackExtension[];
+ extern const char kPackExtensionKey[];
++extern const char kPiPatchVersion[];
+ extern const char kPreCrashpadCrashTest[];
+ extern const char kPredictionServiceMockLikelihood[];
+ extern const char kPreinstalledWebAppsDir[];
+diff --git a/components/version_info/BUILD.gn b/components/version_info/BUILD.gn
+index 236a8e980e828b17d9cc0366b6952ed70ac1400d..998ae491aa7fcd7c0fffc97613d0ef482f9c3f42 100644
+--- a/components/version_info/BUILD.gn
++++ b/components/version_info/BUILD.gn
+@@ -14,6 +14,9 @@ static_library("version_info") {
+   sources = [
+     "version_info.cc",
+     "version_info.h",
++    "pi_patch_version_info.cc",
++    "pi_patch_version_info.h",
++    "pi_patch_version_values.h",
+   ]
+ 
+   deps = [
+diff --git a/components/version_info/pi_patch_version_info.cc b/components/version_info/pi_patch_version_info.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..f7e06cb6441567f9467d2aab5a2ac1a291db70eb
+--- /dev/null
++++ b/components/version_info/pi_patch_version_info.cc
+@@ -0,0 +1,11 @@
++#include "components/version_info/pi_patch_version_info.h"
++#include "components/version_info/pi_patch_version_values.h"
++
++namespace version_info {
++
++std::string GetPiPatchVersionString() {
++  return PI_PATCH_VERSION_STRING;
++}
++
++}  // namespace version_info
++
+diff --git a/components/version_info/pi_patch_version_info.h b/components/version_info/pi_patch_version_info.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..d8009bdcd0ad056658ae6521818c2c2f034b4216
+--- /dev/null
++++ b/components/version_info/pi_patch_version_info.h
+@@ -0,0 +1,12 @@
++#ifndef COMPONENTS_PI_PATCH_VERSION_INFO_VERSION_INFO_H_
++#define COMPONENTS_PI_PATCH_VERSION_INFO_VERSION_INFO_H_
++
++#include <string>
++
++namespace version_info {
++
++// Returns a string with the patch tag for our patches
++std::string GetPiPatchVersionString();
++
++}  // namespace version_info
++#endif  // COMPONENTS_VERSION_INFO_VERSION_INFO_H_
+diff --git a/components/version_info/pi_patch_version_values.h b/components/version_info/pi_patch_version_values.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..924ecb4eb053f9361ca80fba461fc7c63e121fb8
+--- /dev/null
++++ b/components/version_info/pi_patch_version_values.h
+@@ -0,0 +1,2 @@
++// Pi patch version - generated by pi-util/settag.py
++#define PI_PATCH_VERSION_STRING "rpi_2.52"
+diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
+index b299ac949e08345d24d047c8ecfb4c65004adf64..ea22c9a790a028da877324a6eb65fd536e8407f6 100644
+--- a/content/renderer/render_thread_impl.cc
++++ b/content/renderer/render_thread_impl.cc
+@@ -115,6 +115,7 @@
+ #include "media/base/decoder_factory.h"
+ #include "media/base/media.h"
+ #include "media/base/media_switches.h"
++#include "media/gpu/buildflags.h"
+ #include "media/media_buildflags.h"
+ #include "media/renderers/default_decoder_factory.h"
+ #include "media/video/gpu_video_accelerator_factories.h"
+@@ -1047,7 +1048,7 @@ media::GpuVideoAcceleratorFactories* RenderThreadImpl::GetGpuFactories() {
+ 
+   const bool enable_video_decode_accelerator =
+ 
+-#if BUILDFLAG(IS_LINUX)
++#if BUILDFLAG(IS_LINUX) && !BUILDFLAG(USE_V4L2_CODEC)
+       base::FeatureList::IsEnabled(media::kVaapiVideoDecodeLinux) &&
+ #else
+       !cmd_line->HasSwitch(switches::kDisableAcceleratedVideoDecode) &&
+diff --git a/media/base/media_switches.h b/media/base/media_switches.h
+index 801e4f2492e2062f9c847cb4b1c3cf110a574f86..8b3e8d8811a605f17baca65849c77430cc66d1e7 100644
+--- a/media/base/media_switches.h
++++ b/media/base/media_switches.h
+@@ -293,10 +293,8 @@ MEDIA_EXPORT BASE_DECLARE_FEATURE(kChromeOSHWAV1Decoder);
+ MEDIA_EXPORT BASE_DECLARE_FEATURE(kChromeOSHWVBREncoding);
+ MEDIA_EXPORT BASE_DECLARE_FEATURE(kUseChromeOSDirectVideoDecoder);
+ MEDIA_EXPORT BASE_DECLARE_FEATURE(kLimitConcurrentDecoderInstances);
+-#if defined(ARCH_CPU_ARM_FAMILY)
+ MEDIA_EXPORT BASE_DECLARE_FEATURE(kPreferLibYuvImageProcessor);
+ MEDIA_EXPORT BASE_DECLARE_FEATURE(kPreferGLImageProcessor);
+-#endif  // defined(ARCH_CPU_ARM_FAMILY)
+ #if BUILDFLAG(IS_CHROMEOS)
+ MEDIA_EXPORT BASE_DECLARE_FEATURE(kUseAlternateVideoDecoderImplementation);
+ #endif  // BUILDFLAG(IS_CHROMEOS)
+diff --git a/media/capture/video/linux/video_capture_device_factory_linux.cc b/media/capture/video/linux/video_capture_device_factory_linux.cc
+index bca335210599202ae63962a7dbc57e00d466764f..453ad246c7e4b8a735bea955dbe332cbf4d2bec7 100644
+--- a/media/capture/video/linux/video_capture_device_factory_linux.cc
++++ b/media/capture/video/linux/video_capture_device_factory_linux.cc
+@@ -310,8 +310,25 @@ void VideoCaptureDeviceFactoryLinux::GetSupportedFormatsForV4L2BufferType(
+       } else if (frame_size.type == V4L2_FRMSIZE_TYPE_STEPWISE ||
+                  frame_size.type == V4L2_FRMSIZE_TYPE_CONTINUOUS) {
+         // TODO(mcasas): see http://crbug.com/249953, support these devices.
+-        NOTIMPLEMENTED_LOG_ONCE();
+-        continue;
++//        NOTIMPLEMENTED_LOG_ONCE();
++//        continue;
++        // Kludge so we have some video
++        static const v4l2_frmsize_discrete sizes[] = {
++          {1280, 720},
++          {640, 360},
++          {320, 180}
++        };
++        for (const auto& size : sizes) {
++          supported_format.frame_size.SetSize(size.width, size.height);
++          const std::vector<float> frame_rates = GetFrameRateList(
++              fd, v4l2_format.pixelformat, size.width, size.height);
++          for (const auto& frame_rate : frame_rates) {
++            supported_format.frame_rate = frame_rate;
++            supported_formats->push_back(supported_format);
++            DVLOG(1) << VideoCaptureFormat::ToString(supported_format);
++          }
++        }
++        break;
+       }
+ 
+       const std::vector<float> frame_rates = GetFrameRateList(
+diff --git a/media/gpu/BUILD.gn b/media/gpu/BUILD.gn
+index 8e473fe751874fb16e59c78eb5e01f98ea4b161a..37d74e88f46e88d6d0685d515c116c108ff15ddb 100644
+--- a/media/gpu/BUILD.gn
++++ b/media/gpu/BUILD.gn
+@@ -19,6 +19,7 @@ buildflag_header("buildflags") {
+     "USE_VAAPI=$use_vaapi",
+     "USE_VAAPI_IMAGE_CODECS=$use_vaapi_image_codecs",
+     "USE_V4L2_CODEC=$use_v4l2_codec",
++    "USE_V4L2_CODEC_RPI=$use_v4l2_codec_rpi",
+     "USE_LIBV4L2=$use_v4lplugin",
+     "USE_VAAPI_X11=$use_vaapi_x11",
+   ]
+diff --git a/media/gpu/args.gni b/media/gpu/args.gni
+index 813657af180f293cef0796ce90470b23b611883d..30c9686d399657dcac1d1a6abc2613dd2e1f36c6 100644
+--- a/media/gpu/args.gni
++++ b/media/gpu/args.gni
+@@ -25,6 +25,10 @@ declare_args() {
+   # platforms which have v4l2 hardware encoder
+   use_v4l2_codec_aml = false
+ 
++  # Indicates if this is V4L2 on RPi.  Only compiles stateful V4L2 code
++  # and removes all legacy codecs
++  use_v4l2_codec_rpi = false
++
+   # Indicates if VA-API-based hardware acceleration is to be used. This
+   # is typically the case on x86-based ChromeOS devices.
+   # VA-API should also be compiled by default on x11-using linux devices
+diff --git a/media/gpu/gpu_video_decode_accelerator_factory.cc b/media/gpu/gpu_video_decode_accelerator_factory.cc
+index 4fa596240737fa871385be228f8cdd71d9912465..9da7763549e5786115dbf471c364a83b86349245 100644
+--- a/media/gpu/gpu_video_decode_accelerator_factory.cc
++++ b/media/gpu/gpu_video_decode_accelerator_factory.cc
+@@ -30,7 +30,9 @@
+ #elif BUILDFLAG(USE_V4L2_CODEC) && \
+     (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_ASH))
+ #include "media/gpu/v4l2/v4l2_device.h"
++#if !BUILDFLAG(USE_V4L2_CODEC_RPI)
+ #include "media/gpu/v4l2/v4l2_slice_video_decode_accelerator.h"
++#endif
+ #include "media/gpu/v4l2/v4l2_video_decode_accelerator.h"
+ #include "ui/gl/gl_surface_egl.h"
+ #endif
+@@ -66,10 +68,12 @@ gpu::VideoDecodeAcceleratorCapabilities GetDecoderCapabilitiesInternal(
+   GpuVideoAcceleratorUtil::InsertUniqueDecodeProfiles(
+       V4L2VideoDecodeAccelerator::GetSupportedProfiles(),
+       &capabilities.supported_profiles);
++#if !BUILDFLAG(USE_V4L2_CODEC_RPI)
+   GpuVideoAcceleratorUtil::InsertUniqueDecodeProfiles(
+       V4L2SliceVideoDecodeAccelerator::GetSupportedProfiles(),
+       &capabilities.supported_profiles);
+ #endif
++#endif
+ #elif BUILDFLAG(IS_MAC)
+   capabilities.supported_profiles =
+       VTVideoDecodeAccelerator::GetSupportedProfiles(workarounds);
+@@ -150,8 +154,10 @@ GpuVideoDecodeAcceleratorFactory::CreateVDA(
+ #elif BUILDFLAG(USE_V4L2_CODEC) && \
+     (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_ASH))
+     &GpuVideoDecodeAcceleratorFactory::CreateV4L2VDA,
++#if !BUILDFLAG(USE_V4L2_CODEC_RPI)
+     &GpuVideoDecodeAcceleratorFactory::CreateV4L2SliceVDA,
+ #endif
++#endif
+ 
+ #if BUILDFLAG(IS_MAC)
+     &GpuVideoDecodeAcceleratorFactory::CreateVTVDA,
+@@ -212,6 +218,7 @@ GpuVideoDecodeAcceleratorFactory::CreateV4L2VDA(
+   return decoder;
+ }
+ 
++#if !BUILDFLAG(USE_V4L2_CODEC_RPI)
+ std::unique_ptr<VideoDecodeAccelerator>
+ GpuVideoDecodeAcceleratorFactory::CreateV4L2SliceVDA(
+     const gpu::GpuDriverBugWorkarounds& /*workarounds*/,
+@@ -227,6 +234,7 @@ GpuVideoDecodeAcceleratorFactory::CreateV4L2SliceVDA(
+   return decoder;
+ }
+ #endif
++#endif
+ 
+ #if BUILDFLAG(IS_MAC)
+ std::unique_ptr<VideoDecodeAccelerator>
+diff --git a/media/gpu/v4l2/BUILD.gn b/media/gpu/v4l2/BUILD.gn
+index cfc2d8cb42d261a01c67ad21ab72b7bfd6332603..f8b52802737e16b630543efaa486c4e06dae8423 100644
+--- a/media/gpu/v4l2/BUILD.gn
++++ b/media/gpu/v4l2/BUILD.gn
+@@ -27,9 +27,6 @@ source_set("v4l2") {
+     "buffer_affinity_tracker.h",
+     "generic_v4l2_device.cc",
+     "generic_v4l2_device.h",
+-    "v4l2_decode_surface.cc",
+-    "v4l2_decode_surface.h",
+-    "v4l2_decode_surface_handler.h",
+     "v4l2_device.cc",
+     "v4l2_device.h",
+     "v4l2_device_poller.cc",
+@@ -38,8 +35,6 @@ source_set("v4l2") {
+     "v4l2_framerate_control.h",
+     "v4l2_image_processor_backend.cc",
+     "v4l2_image_processor_backend.h",
+-    "v4l2_slice_video_decode_accelerator.cc",
+-    "v4l2_slice_video_decode_accelerator.h",
+     "v4l2_stateful_workaround.cc",
+     "v4l2_stateful_workaround.h",
+     "v4l2_utils.cc",
+@@ -53,17 +48,38 @@ source_set("v4l2") {
+     "v4l2_video_decoder_backend.cc",
+     "v4l2_video_decoder_backend.h",
+     "v4l2_video_decoder_backend_stateful.cc",
+-    "v4l2_video_decoder_backend_stateful.h",
+-    "v4l2_video_decoder_backend_stateless.cc",
+-    "v4l2_video_decoder_backend_stateless.h",
+-    "v4l2_video_decoder_delegate_h264.cc",
+-    "v4l2_video_decoder_delegate_h264.h",
+-    "v4l2_video_decoder_delegate_vp8.cc",
+-    "v4l2_video_decoder_delegate_vp8.h",
+-    "v4l2_video_decoder_delegate_vp9.cc",
+-    "v4l2_video_decoder_delegate_vp9.h",
++    "v4l2_video_decoder_backend_stateful.h"
+   ]
+ 
++  if (!use_v4l2_codec_rpi) {
++    sources += [
++      "v4l2_decode_surface.cc",
++      "v4l2_decode_surface.h",
++      "v4l2_decode_surface_handler.h",
++
++      "v4l2_slice_video_decode_accelerator.cc",
++      "v4l2_slice_video_decode_accelerator.h",
++
++      "v4l2_video_decoder_backend_stateless.cc",
++      "v4l2_video_decoder_backend_stateless.h",
++      "v4l2_video_decoder_delegate_h264.cc",
++      "v4l2_video_decoder_delegate_h264.h",
++      "v4l2_video_decoder_delegate_h264_legacy.cc",
++      "v4l2_video_decoder_delegate_h264_legacy.h",
++      "v4l2_video_decoder_delegate_vp8.cc",
++      "v4l2_video_decoder_delegate_vp8.h",
++      "v4l2_video_decoder_delegate_vp8_legacy.cc",
++      "v4l2_video_decoder_delegate_vp8_legacy.h",
++      "v4l2_video_decoder_delegate_vp9.cc",
++      "v4l2_video_decoder_delegate_vp9.h",
++      "v4l2_video_decoder_delegate_vp9_chromium.cc",
++      "v4l2_video_decoder_delegate_vp9_chromium.h",
++      "v4l2_video_decoder_delegate_vp9_legacy.cc",
++      "v4l2_video_decoder_delegate_vp9_legacy.h",
++    ]
++  }
++
++
+   if (is_chromeos) {
+     sources += [
+       # AV1 delegate depends on header files only in ChromeOS SDK
+@@ -82,7 +98,7 @@ source_set("v4l2") {
+     "GLESv2",
+   ]
+ 
+-  if (use_v4l2_codec_aml) {
++  if (use_v4l2_codec_aml && !use_v4l2_codec_rpi) {
+     sources += [
+       "aml_v4l2_device.cc",
+       "aml_v4l2_device.h",
+diff --git a/media/gpu/v4l2/generic_v4l2_device.cc b/media/gpu/v4l2/generic_v4l2_device.cc
+index fa9a95b957bba7d68e484a4f0111d6204726e373..80daa35d8b04ec7124d7833484d882e155ed42b1 100644
+--- a/media/gpu/v4l2/generic_v4l2_device.cc
++++ b/media/gpu/v4l2/generic_v4l2_device.cc
+@@ -464,7 +464,11 @@ bool GenericV4L2Device::PostSandboxInitialization() {
+ }
+ 
+ void GenericV4L2Device::EnumerateDevicesForType(Type type) {
++#if BUILDFLAG(USE_V4L2_CODEC_RPI)
++  static const std::string kDecoderDevicePattern = "/dev/video1";
++#else
+   static const std::string kDecoderDevicePattern = "/dev/video-dec";
++#endif
+   static const std::string kEncoderDevicePattern = "/dev/video-enc";
+   static const std::string kImageProcessorDevicePattern = "/dev/image-proc";
+   static const std::string kJpegDecoderDevicePattern = "/dev/jpeg-dec";
+diff --git a/media/gpu/v4l2/v4l2_device.cc b/media/gpu/v4l2/v4l2_device.cc
+index 3a95b3c58dd3f3bd1e4d0346aeb61fa762be606c..ca778ba8d480940a474ddf0a958c276cd7a3f6b7 100644
+--- a/media/gpu/v4l2/v4l2_device.cc
++++ b/media/gpu/v4l2/v4l2_device.cc
+@@ -32,6 +32,7 @@
+ #include "media/base/color_plane_layout.h"
+ #include "media/base/media_switches.h"
+ #include "media/base/video_types.h"
++#include "media/gpu/buildflags.h"
+ #include "media/gpu/chromeos/fourcc.h"
+ #include "media/gpu/chromeos/platform_video_frame_utils.h"
+ #include "media/gpu/macros.h"
+@@ -48,8 +49,10 @@ namespace media {
+ 
+ namespace {
+ 
++#if !BUILDFLAG(USE_V4L2_CODEC_RPI)
+ // Maximum number of requests that can be created.
+ constexpr size_t kMaxNumRequests = 32;
++#endif
+ 
+ gfx::Rect V4L2RectToGfxRect(const v4l2_rect& rect) {
+   return gfx::Rect(rect.left, rect.top, rect.width, rect.height);
+@@ -609,10 +612,12 @@ bool V4L2WritableBufferRef::DoQueue(V4L2RequestRef* request_ref,
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+   DCHECK(buffer_data_);
+ 
++#if !BUILDFLAG(USE_V4L2_CODEC_RPI)
+   if (request_ref && buffer_data_->queue_->SupportsRequests() &&
+       !request_ref->ApplyQueueBuffer(&(buffer_data_->v4l2_buffer_))) {
+     return false;
+   }
++#endif
+ 
+   bool queued = buffer_data_->QueueBuffer(std::move(video_frame));
+ 
+@@ -875,7 +880,9 @@ void V4L2WritableBufferRef::SetConfigStore(uint32_t config_store) {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+   DCHECK(buffer_data_);
+ 
++#if defined(OS_CHROMEOS)
+   buffer_data_->v4l2_buffer_.config_store = config_store;
++#endif
+ }
+ #endif
+ 
+@@ -1008,6 +1015,7 @@ V4L2Queue::V4L2Queue(scoped_refptr<V4L2Device> dev,
+       weak_this_factory_(this) {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+ 
++#if !BUILDFLAG(USE_V4L2_CODEC_RPI)
+   // Check if this queue support requests.
+   struct v4l2_requestbuffers reqbufs;
+   memset(&reqbufs, 0, sizeof(reqbufs));
+@@ -1023,6 +1031,7 @@ V4L2Queue::V4L2Queue(scoped_refptr<V4L2Device> dev,
+     supports_requests_ = true;
+     DVLOGF(4) << "Queue supports request API.";
+   }
++#endif
+ }
+ 
+ V4L2Queue::~V4L2Queue() {
+@@ -1585,17 +1594,29 @@ uint32_t V4L2Device::VideoCodecProfileToV4L2PixFmt(VideoCodecProfile profile,
+                                                    bool slice_based) {
+   if (profile >= H264PROFILE_MIN && profile <= H264PROFILE_MAX) {
+     if (slice_based)
++#ifdef V4L2_PIX_FMT_H264_SLICE
+       return V4L2_PIX_FMT_H264_SLICE;
++#else
++      /* EMPTY */;
++#endif
+     else
+       return V4L2_PIX_FMT_H264;
+   } else if (profile >= VP8PROFILE_MIN && profile <= VP8PROFILE_MAX) {
+     if (slice_based)
++#ifdef V4L2_PIX_FMT_VP8_FRAME
+       return V4L2_PIX_FMT_VP8_FRAME;
++#else
++      /* EMPTY */;
++#endif
+     else
+       return V4L2_PIX_FMT_VP8;
+   } else if (profile >= VP9PROFILE_MIN && profile <= VP9PROFILE_MAX) {
+     if (slice_based)
++#ifdef V4L2_PIX_FMT_VP9_FRAME
+       return V4L2_PIX_FMT_VP9_FRAME;
++#else
++      /* EMPTY */;
++#endif
+     else
+       return V4L2_PIX_FMT_VP9;
+   } else if (profile >= AV1PROFILE_MIN && profile <= AV1PROFILE_MAX) {
+@@ -1603,10 +1624,9 @@ uint32_t V4L2Device::VideoCodecProfileToV4L2PixFmt(VideoCodecProfile profile,
+       return V4L2_PIX_FMT_AV1_FRAME;
+     else
+       return V4L2_PIX_FMT_AV1;
+-  } else {
+-    DVLOGF(1) << "Unsupported profile: " << GetProfileName(profile);
+-    return 0;
+   }
++  LOG(ERROR) << "Unknown profile: " << GetProfileName(profile);
++  return 0;
+ }
+ 
+ namespace {
+@@ -1718,7 +1738,9 @@ std::vector<VideoCodecProfile> V4L2Device::V4L2PixFmtToVideoCodecProfiles(
+   std::vector<VideoCodecProfile> profiles;
+   switch (pix_fmt) {
+     case V4L2_PIX_FMT_H264:
++#ifdef V4L2_PIX_FMT_H264_SLICE
+     case V4L2_PIX_FMT_H264_SLICE:
++#endif
+       if (!get_supported_profiles(VideoCodec::kH264, &profiles)) {
+         DLOG(WARNING) << "Driver doesn't support QUERY H264 profiles, "
+                       << "use default values, Base, Main, High";
+@@ -1730,11 +1752,15 @@ std::vector<VideoCodecProfile> V4L2Device::V4L2PixFmtToVideoCodecProfiles(
+       }
+       break;
+     case V4L2_PIX_FMT_VP8:
++#ifdef V4L2_PIX_FMT_VP8_FRAME
+     case V4L2_PIX_FMT_VP8_FRAME:
++#endif
+       profiles = {VP8PROFILE_ANY};
+       break;
+     case V4L2_PIX_FMT_VP9:
++#ifdef V4L2_PIX_FMT_VP9_FRAME
+     case V4L2_PIX_FMT_VP9_FRAME:
++#endif
+       if (!get_supported_profiles(VideoCodec::kVP9, &profiles)) {
+         DLOG(WARNING) << "Driver doesn't support QUERY VP9 profiles, "
+                       << "use default values, Profile0";
+@@ -2259,6 +2285,7 @@ absl::optional<struct v4l2_event> V4L2Device::DequeueEvent() {
+   return event;
+ }
+ 
++#if !BUILDFLAG(USE_V4L2_CODEC_RPI)
+ V4L2RequestsQueue* V4L2Device::GetRequestsQueue() {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(client_sequence_checker_);
+ 
+@@ -2327,6 +2354,7 @@ V4L2RequestsQueue* V4L2Device::GetRequestsQueue() {
+ 
+   return requests_queue_.get();
+ }
++#endif
+ 
+ bool V4L2Device::IsCtrlExposed(uint32_t ctrl_id) {
+   struct v4l2_queryctrl query_ctrl;
+@@ -2350,8 +2378,10 @@ bool V4L2Device::SetExtCtrls(uint32_t ctrl_class,
+   ext_ctrls.count = ctrls.size();
+   ext_ctrls.controls = &ctrls[0].ctrl;
+ 
++#if !BUILDFLAG(USE_V4L2_CODEC_RPI)
+   if (request_ref)
+     request_ref->ApplyCtrls(&ext_ctrls);
++#endif
+ 
+   const int result = Ioctl(VIDIOC_S_EXT_CTRLS, &ext_ctrls);
+   if (result < 0) {
+@@ -2412,6 +2442,7 @@ bool V4L2Device::SetGOPLength(uint32_t gop_length) {
+   return true;
+ }
+ 
++#if !BUILDFLAG(USE_V4L2_CODEC_RPI)
+ class V4L2Request {
+  public:
+   V4L2Request(const V4L2Request&) = delete;
+@@ -2689,5 +2720,6 @@ void V4L2RequestsQueue::ReturnRequest(V4L2Request* request) {
+   if (request)
+     free_requests_.push(request);
+ }
++#endif
+ 
+ }  //  namespace media
+diff --git a/media/gpu/v4l2/v4l2_device.h b/media/gpu/v4l2/v4l2_device.h
+index 8ee721ce592b88b1d5d74066030409e855fa97b3..b4c12732db97c2f88d3f8393d92283513fb68460 100644
+--- a/media/gpu/v4l2/v4l2_device.h
++++ b/media/gpu/v4l2/v4l2_device.h
+@@ -32,6 +32,7 @@
+ #include "media/base/video_decoder_config.h"
+ #include "media/base/video_frame.h"
+ #include "media/base/video_frame_layout.h"
++#include "media/gpu/buildflags.h"
+ #include "media/gpu/chromeos/fourcc.h"
+ #include "media/gpu/media_gpu_export.h"
+ #include "media/gpu/v4l2/buffer_affinity_tracker.h"
+@@ -88,6 +89,26 @@
+ #define V4L2_PIX_FMT_MM21 v4l2_fourcc('M', 'M', '2', '1')
+ #endif
+ 
++// Missing defines in the 5.4 linux/v4l2-controls.h
++#ifndef V4L2_CID_MPEG_VIDEO_VP8_PROFILE
++#define V4L2_CID_MPEG_VIDEO_VP8_PROFILE                 (V4L2_CID_MPEG_BASE+511)
++enum v4l2_mpeg_video_vp8_profile {
++  V4L2_MPEG_VIDEO_VP8_PROFILE_0 = 0,
++  V4L2_MPEG_VIDEO_VP8_PROFILE_1 = 1,
++  V4L2_MPEG_VIDEO_VP8_PROFILE_2 = 2,
++  V4L2_MPEG_VIDEO_VP8_PROFILE_3 = 3,
++};
++#endif
++#ifndef V4L2_CID_MPEG_VIDEO_VP9_PROFILE
++#define V4L2_CID_MPEG_VIDEO_VP9_PROFILE                 (V4L2_CID_MPEG_BASE+512)
++enum v4l2_mpeg_video_vp9_profile {
++  V4L2_MPEG_VIDEO_VP9_PROFILE_0 = 0,
++  V4L2_MPEG_VIDEO_VP9_PROFILE_1 = 1,
++  V4L2_MPEG_VIDEO_VP9_PROFILE_2 = 2,
++  V4L2_MPEG_VIDEO_VP9_PROFILE_3 = 3,
++};
++#endif
++
+ namespace gfx {
+ struct NativePixmapPlane;
+ }  // namespace gfx
+@@ -532,6 +553,7 @@ class MEDIA_GPU_EXPORT V4L2Queue
+   base::WeakPtrFactory<V4L2Queue> weak_this_factory_;
+ };
+ 
++#if !BUILDFLAG(USE_V4L2_CODEC_RPI)
+ class V4L2Request;
+ 
+ // Base class for all request related classes.
+@@ -649,6 +671,7 @@ class MEDIA_GPU_EXPORT V4L2RequestsQueue {
+ 
+   SEQUENCE_CHECKER(sequence_checker_);
+ };
++#endif
+ 
+ class MEDIA_GPU_EXPORT V4L2Device
+     : public base::RefCountedThreadSafe<V4L2Device> {
+@@ -838,9 +861,11 @@ class MEDIA_GPU_EXPORT V4L2Device
+   // Attempt to dequeue a V4L2 event and return it.
+   absl::optional<struct v4l2_event> DequeueEvent();
+ 
++#if !BUILDFLAG(USE_V4L2_CODEC_RPI)
+   // Returns requests queue to get free requests. A null pointer is returned if
+   // the queue creation failed or if requests are not supported.
+   V4L2RequestsQueue* GetRequestsQueue();
++#endif
+ 
+   // Check whether the V4L2 control with specified |ctrl_id| is supported.
+   bool IsCtrlExposed(uint32_t ctrl_id);
+@@ -889,8 +914,10 @@ class MEDIA_GPU_EXPORT V4L2Device
+   // Indicates whether the request queue creation has been tried once.
+   bool requests_queue_creation_called_ = false;
+ 
++#if !BUILDFLAG(USE_V4L2_CODEC_RPI)
+   // The request queue stores all requests allocated to be used.
+   std::unique_ptr<V4L2RequestsQueue> requests_queue_;
++#endif
+ 
+   SEQUENCE_CHECKER(client_sequence_checker_);
+ };
+diff --git a/media/gpu/v4l2/v4l2_video_decode_accelerator.cc b/media/gpu/v4l2/v4l2_video_decode_accelerator.cc
+index 074fe913ed627eb2dba5504495fd6b660b38466b..a67f74a4c38476406f44ca5a06fc7a1d251e578d 100644
+--- a/media/gpu/v4l2/v4l2_video_decode_accelerator.cc
++++ b/media/gpu/v4l2/v4l2_video_decode_accelerator.cc
+@@ -1194,6 +1194,26 @@ bool V4L2VideoDecodeAccelerator::FlushInputFrame() {
+   return (decoder_state_ != kError);
+ }
+ 
++void V4L2VideoDecodeAccelerator::CheckResolutionChangePending() {
++  struct v4l2_format format;
++  gfx::Size visible_size;
++  bool again;
++  GetFormatInfo(&format, &visible_size, &again);
++  gfx::Size new_coded(format.fmt.pix_mp.width, format.fmt.pix_mp.height);
++  if (resolution_change_pending_) {
++    if (coded_size_ == new_coded) {
++      LOG(INFO) << __func__ << ": New resolution " << new_coded.ToString() << " == Old resolution: Cancel change";
++      resolution_change_pending_ = false;
++    }
++  } else {
++    if (coded_size_ != new_coded) {
++      LOG(INFO) << __func__ << ": New resolution " << new_coded.ToString() <<
++        "!= Old resolution: " << coded_size_.ToString() << " Start change";
++      resolution_change_pending_ = true;
++    }
++  }
++}
++
+ void V4L2VideoDecodeAccelerator::ServiceDeviceTask(bool event_pending) {
+   DVLOGF(4);
+   DCHECK(decoder_thread_.task_runner()->BelongsToCurrentThread());
+@@ -1217,11 +1237,11 @@ void V4L2VideoDecodeAccelerator::ServiceDeviceTask(bool event_pending) {
+     return;
+   }
+ 
+-  bool resolution_change_pending = false;
++  resolution_change_pending_ = false;
+   if (event_pending)
+-    resolution_change_pending = DequeueResolutionChangeEvent();
++    resolution_change_pending_ = DequeueResolutionChangeEvent();
+ 
+-  if (!resolution_change_pending && coded_size_.IsEmpty()) {
++  if (!resolution_change_pending_ && coded_size_.IsEmpty()) {
+     // Some platforms do not send an initial resolution change event.
+     // To work around this, we need to keep checking if the initial resolution
+     // is known already by explicitly querying the format after each decode,
+@@ -1234,11 +1254,15 @@ void V4L2VideoDecodeAccelerator::ServiceDeviceTask(bool event_pending) {
+     gfx::Size visible_size;
+     bool again;
+     if (GetFormatInfo(&format, &visible_size, &again) && !again) {
+-      resolution_change_pending = true;
++      resolution_change_pending_ = true;
+       DequeueResolutionChangeEvent();
+     }
+   }
+ 
++  if (resolution_change_pending_) {
++    LOG(INFO) << "Resolution change pending";
++  }
++
+   Dequeue();
+   Enqueue();
+ 
+@@ -1280,7 +1304,7 @@ void V4L2VideoDecodeAccelerator::ServiceDeviceTask(bool event_pending) {
+             << buffers_at_client_.size() << "]";
+ 
+   ScheduleDecodeBufferTaskIfNeeded();
+-  if (resolution_change_pending)
++  if (resolution_change_pending_)
+     StartResolutionChange();
+ }
+ 
+@@ -1563,8 +1587,11 @@ bool V4L2VideoDecodeAccelerator::EnqueueOutputRecord(
+   }
+ 
+   if (!ret) {
+-    LOG(ERROR) << "Error in Dequeue output buffer";
+-    NOTIFY_ERROR(PLATFORM_FAILURE);
++    CheckResolutionChangePending();
++    if (!resolution_change_pending_) {
++      LOG(ERROR) << "Error in Enqueue output buffer";
++      NOTIFY_ERROR(PLATFORM_FAILURE);
++    }
+     return false;
+   }
+ 
+@@ -1725,7 +1752,7 @@ bool V4L2VideoDecodeAccelerator::IsDecoderCmdSupported() {
+   memset(&cmd, 0, sizeof(cmd));
+   cmd.cmd = V4L2_DEC_CMD_STOP;
+   if (device_->Ioctl(VIDIOC_TRY_DECODER_CMD, &cmd) != 0) {
+-    VLOGF(2) "V4L2_DEC_CMD_STOP is not supported.";
++    VLOGF(2) << "V4L2_DEC_CMD_STOP is not supported.";
+     return false;
+   }
+ 
+diff --git a/media/gpu/v4l2/v4l2_video_decode_accelerator.h b/media/gpu/v4l2/v4l2_video_decode_accelerator.h
+index 4e0ad98942a81f329199c80df1f1856e426fe54f..43956c8e646c54bdd3fc5f98ccddf914520cef89 100644
+--- a/media/gpu/v4l2/v4l2_video_decode_accelerator.h
++++ b/media/gpu/v4l2/v4l2_video_decode_accelerator.h
+@@ -274,6 +274,9 @@ class MEDIA_GPU_EXPORT V4L2VideoDecodeAccelerator
+                       int32_t picture_buffer_id,
+                       EGLImageKHR egl_image);
+ 
++
++  void CheckResolutionChangePending();
++
+   // Service I/O on the V4L2 devices.  This task should only be scheduled from
+   // DevicePollTask().  If |event_pending| is true, one or more events
+   // on file descriptor are pending.
+@@ -579,6 +582,9 @@ class MEDIA_GPU_EXPORT V4L2VideoDecodeAccelerator
+   // The number of pictures that are sent to PictureReady and will be cleared.
+   int picture_clearing_count_;
+ 
++  // We've spotted that we need a res change
++  bool resolution_change_pending_;
++
+   // Output picture coded size.
+   gfx::Size coded_size_;
+ 
+diff --git a/media/gpu/v4l2/v4l2_video_decoder.cc b/media/gpu/v4l2/v4l2_video_decoder.cc
+index 1f6cb8d3f68fd55a9d4c5dede53a2cabd57632c8..79d4d1609e5306574700f3d8436c28cbe03daef4 100644
+--- a/media/gpu/v4l2/v4l2_video_decoder.cc
++++ b/media/gpu/v4l2/v4l2_video_decoder.cc
+@@ -18,6 +18,7 @@
+ #include "media/base/media_switches.h"
+ #include "media/base/video_types.h"
+ #include "media/base/video_util.h"
++#include "media/gpu/buildflags.h"
+ #include "media/gpu/chromeos/chromeos_status.h"
+ #include "media/gpu/chromeos/dmabuf_video_frame_pool.h"
+ #include "media/gpu/chromeos/fourcc.h"
+@@ -28,7 +29,9 @@
+ #include "media/gpu/macros.h"
+ #include "media/gpu/v4l2/v4l2_status.h"
+ #include "media/gpu/v4l2/v4l2_video_decoder_backend_stateful.h"
++#if !BUILDFLAG(USE_V4L2_CODEC_RPI)
+ #include "media/gpu/v4l2/v4l2_video_decoder_backend_stateless.h"
++#endif
+ 
+ namespace media {
+ 
+@@ -45,15 +48,21 @@ constexpr size_t kInputBufferMaxSizeFor4k = 4 * kInputBufferMaxSizeFor1080p;
+ 
+ // Input format V4L2 fourccs this class supports.
+ constexpr uint32_t kSupportedInputFourccs[] = {
+-    // V4L2 stateless formats
++#ifdef V4L2_PIX_FMT_H264_SLICE
+     V4L2_PIX_FMT_H264_SLICE,
++#endif
++#ifdef V4L2_PIX_FMT_VP8_FRAME
+     V4L2_PIX_FMT_VP8_FRAME,
++#endif
++#ifdef V4L2_PIX_FMT_VP9_FRAME
+     V4L2_PIX_FMT_VP9_FRAME,
++#endif
++    V4L2_PIX_FMT_H264,       V4L2_PIX_FMT_VP8,
++    V4L2_PIX_FMT_VP9,
++
++    // V4L2 stateless formats
+     V4L2_PIX_FMT_AV1_FRAME,
+     // V4L2 stateful formats
+-    V4L2_PIX_FMT_H264,
+-    V4L2_PIX_FMT_VP8,
+-    V4L2_PIX_FMT_VP9,
+     V4L2_PIX_FMT_AV1,
+ };
+ 
+@@ -343,12 +352,17 @@ V4L2Status V4L2VideoDecoder::InitializeBackend() {
+     backend_ = std::make_unique<V4L2StatefulVideoDecoderBackend>(
+         this, device_, profile_, color_space_, decoder_task_runner_);
+   } else {
++#if !BUILDFLAG(USE_V4L2_CODEC_RPI)
+     DCHECK_EQ(preferred_api_and_format.first, kStateless);
+     VLOGF(1) << "Using a stateless API for profile: "
+              << GetProfileName(profile_)
+              << " and fourcc: " << FourccToString(input_format_fourcc);
+     backend_ = std::make_unique<V4L2StatelessVideoDecoderBackend>(
+         this, device_, profile_, color_space_, decoder_task_runner_);
++#else
++    VLOGF(1) << "No backend capable of taking this profile.";
++    return V4L2Status::Codes::kFailedResourceAllocation;
++#endif
+   }
+ 
+   if (!backend_->Initialize()) {
+diff --git a/media/mojo/services/gpu_mojo_media_client_cros.cc b/media/mojo/services/gpu_mojo_media_client_cros.cc
+index 72aa1af66527348fc0d3611b98cd379be7b72264..680441cd1fd4854f8ccb10710509ec24bf12b381 100644
+--- a/media/mojo/services/gpu_mojo_media_client_cros.cc
++++ b/media/mojo/services/gpu_mojo_media_client_cros.cc
+@@ -66,6 +66,10 @@ VideoDecoderType GetActualPlatformDecoderImplementation(
+     const gpu::GPUInfo& gpu_info) {
+ #if BUILDFLAG(IS_CHROMEOS)
+   return GetPreferredCrosDecoderImplementation(gpu_preferences);
++#elif BUILDFLAG(USE_V4L2_CODEC_RPI)
++  // Kludge for RPI to enable h/w decode - V4L2 decode isn't selected
++  // with the normal logic
++  return VideoDecoderType::kVda;
+ #else
+   // On linux, VDA and Vaapi have GL restrictions.
+   switch (GetPreferredLinuxDecoderImplementation(gpu_preferences, gpu_info)) {
+diff --git a/pi-util/BUILD.txt b/pi-util/BUILD.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..6d35adea94889d05357756030bee6de09b6f4bca
+--- /dev/null
++++ b/pi-util/BUILD.txt
+@@ -0,0 +1,250 @@
++Build notes (cross compile from Ubuntu)
++=======================================
++
++Build from a patch
++------------------
++
++# Pick somewhere to put this
++cd ~
++mkdir chromium
++cd chromium
++# Get the build tools & put on path
++# You may want to add the path in .bashrc
++git clone https://chromium.googlesource.com/chromium/tools/depot_tools
++export PATH=$PATH:`pwd`/depot_tools
++# Get the main tree
++fetch chromium
++cd src
++# Checkout the version you want
++# * Fix version number
++git checkout 55.0.2883.99
++# Fix up any missing dependancies on the build m/c
++# * may well be unnecessary if you have built any other chrome
++./build/install-build-deps.sh
++./build/install-build-deps.sh --arm
++# Fetch & pull the other bits of the tree to sync.
++# As we are checking out a tag the --with_branch_heads is important
++gclient sync --with_branch_heads
++# Patch - should be completely clean if everything matchs
++# * Fix patch file to correct name / location
++cd ..
++patch -p1 < v55.0.2883.99.patch
++cd src
++# * Get a sysroot from somewhere and put it in build/linux/raspian_jessie_pi1-sysroot
++# * Example below is only if you have got an appropriate one lying around
++# * Otherwise follow sysroot instructions further down
++rsync -rl previous_location/raspian_jessie_pi1-sysroot build/linux/
++# Build output directories (out/armv6, out/armv7)
++# * This script currently assumes a sysroot of build/linux/raspian_jessie_pi1-sysroot
++#   so may need editing if you have put it elsewhere
++pi-util/gngen.py
++# Build chrome
++ninja -C out/armv6 chrome chrome_sandbox
++# Build armv7 ffmpeg
++ninja -C out/armv7 third_party/ffmpeg
++
++
++To run on a Pi
++--------------
++
++This requires a little installation.  The sandbox and ffmpeg shared libs
++need to be copied to the pi.  As neither is being tweaked much by me these
++steps should only be required if the underlying Chrome changes.  Otherwise
++you can just run out of the build directory (src/out/armv6)
++
++Assuming you can mount the build dir from the pi.
++
++# On the Pi NOT the build machine
++cd <path to build env>/src
++# Copy the ffmpeg libs
++pi-util/cplibs.sh
++# Copy the sandbox. BUILDTYPE tells the script where to get it from
++# This doesn't seem to be needed anymore with linux 4.9 and chrome 55
++BUILDTYPE=armv6 build/update-linux-sandbox.sh
++# Run chrome
++cd out/armv6
++./chrome
++
++
++Rebuilds
++--------
++
++In most cases a simple "ninja -C out/armv6 chrome" is all that is needed
++and the pi can run from out/armv6.
++
++To clean build "rm -rf out" and follow the build instructions from gngen.py
++
++
++Updating chromium from git
++--------------------------
++
++There is no script for this as the merges are prone to conflicts and it
++is much easier to sort them if you are doing stuff manually.
++
++If updating between major versions then mergeing tends to fail horribly
++so something along the lines of:
++
++# Remember where we are
++cat pi-util/pipaths.py
++OLDTAG=100...
++
++# Look for where we are going
++git tag -l "101.*"
++TAG=101...
++
++# * Make sure there are no updates required and no untracked files
++pi-util/gitscan.py status
++# Set rename limit to huge as files are moved around frequently and getting
++# git to track them is much easier than trying to do it ourselves
++git config diff.renameLimit 1000000
++
++# Tag source & make a patch file - patch file is useful when files are moved
++# as then git goes all unhelpful
++pi-util/settag.py -p rpi_2.49
++# As git stash will reset the branch switch to a temp branch 1st
++pi-util/gitscan.py checkout -b stash/100/base
++pi-util/gitscan.py --gitscan-no-src reset {BASE}
++pi-util/gitscan.py --gitscan-no-src stash -u
++pi-util/gitscan.py --gitscan-no-src checkout {BASE}
++
++# Need to do src separately as the stash will lose pi-utils
++git reset $OLDTAG
++git stash -u
++
++git checkout $TAG -b test/101/rpi_2
++
++# Clean out old objects
++rm -rf out
++# Beware that git clean might kill our sub-repos so so don't do it unless we
++# are sure it won't
++# git clean -dxf
++
++### Do the "get environment" stages of a new build
++./build/install-build-deps.sh
++./build/install-build-deps.sh --arm
++# Fetch & pull the other bits of the tree to sync.
++# As we are checking out a tag the --with_branch_heads is important
++gclient sync -D --with_branch_heads
++
++# Start rebuild
++git stash pop
++
++# Fix pipaths & make new branches (now so we don't forget later)
++sed "s/src_commit=.*/src_commit=\"$TAG\"/" pi-util/pipaths.py | tee t
++mv t pi-util/pipaths.py && git add pi-util/pipaths.py
++chmod 0755 pi-util/*.py pi-util/*.sh
++pi-util/gitscan.py --gitscan-no-src checkout -b test/101/rpi_2
++
++# If running with filemode false then readd pi-util with filemode true
++git config core.filemode true
++git add pi-util
++git config core.filemode false
++
++
++### Fix conflicts (there will be some)
++
++# If building a separated ffmpeg .so (we are not not currrently) then
++# fix chrome major version for ffmpeg .so in pi-util/cplibs.sh and third_party/ffmpeg/BUILD.gn
++
++git commit
++### run through all other dirs we care about doing the same
++### Probably need to fix exec perms on pi-util scripts
++pi-util/rootgen.sh
++pi-util/gngen.py
++### Fix up any new libpackage-dev that we need
++ninja ...
++### Fix up build disasters
++
++
++If updating within a major version mergeing seems to work reliably so my
++preferred method for achieving this goes:
++
++# Make sure everything is committed
++pi-util/gitscan.py status
++# Revert to base chromium checkout for old checkout
++pi-util/gitscan.py --gitscan-no-src checkout {BASE}
++# Merge new version into current base
++git fetch --all
++TAG=<new_tag>
++git merge $TAG
++# Fix conflicts - DEPS always seems to conflict
++git checkout $TAG -- DEPS
++# Update pi-util/pipaths.py to contain the new tag
++# Either commit now or later
++sed "s/src_commit=.*/src_commit=\"$TAG\"/" pi-util/pipaths.py | tee t
++mv t pi-util/pipaths.py && git add pi-util/pipaths.py
++git commit --no-edit
++# Get the rest of the tree
++gclient sync --with_branch_heads
++# Checkout our tree and merge the new base into it
++pi-util/gitscan.py --gitscan-no-src checkout test/101/rpi_2
++pi-util/gitscan.py --gitscan-no-src merge --no-edit {BASE}
++
++and we should be good to go.  At this point you can either clean build or
++not.  Chromes dependancy checks seem remarkably good so a simple build
++works nearly all the time.
++
++# Rebuild from clean
++rm -rf out
++# refetch root (optional)
++pi-util/rootgen.sh
++# Configure
++pi-util/gngen.py
++# Build release armv7 chrome (and any other targets you feel like)
++ninja -C out/armv7-rel chrome
++
++
++Sysroots (one time only)
++------------------------
++
++1st you will need to get the dev files for a bunch of libs on your pi (or
++if you can get the right files by magic on your cross-compile m/c then
++that is good too).  In src/pi-util there is a shell script
++pi-install-dev.sh which lists all the libs I think are needed along with a
++helpful apt-get install so all you should need to do is run it on an
++appropriate pi.
++
++Next the appropriate bits need to be copied to
++build/linux/<sysroot-name>-sysroot. We use raspian_stretch_pi1 as the
++sysroot name in these instructions and in the example script files so you
++might well find it easiest to use the same name too
++
++The script pi-util/syncroot.sh that will copy the needed bits of a root to
++the right place and then fix the full path symlinks to be relative.  It
++uses rsync to copy the files so the src can contain a machine name
++
++pi-util/syncroot.sh my-pi: raspian_stretch_pi1
++
++The "raspian_stretch_pi1" can be omitted and syncroot will choose the current
++default sysroot name.
++
++Beware that there are ~8 rsync statements so if the rsync is operating
++over ssh then you may need to type your password 8 times...  Note also
++that the script appends -sysroot to the given name so don't add that
++yourself!
++
++If the pi root is updated then this script can / should be rerun to update
++the sysroot.
++
++
++
++Other notes on the tree
++-----------------------
++
++The definitive list of expected repos is in pi-util/pipaths.py
++
++The script pi-util/gitscan.py will perform the same git op on all the
++repos that are in use in the current patch set.  It has substitutions
++of {PATH} and {BASE} for the path to the current repo and the chromium
++commit on which the current branch is based
++
++The current dev branch is test/57/mmal_2
++
++Status of optional neon by build file:
++skia/BUILD.gn:                     yes
++build/secondary/third_party/libjpeg_turbo/BUILD.gn: yes
++third_party/libwebp/BUILD.gn:      yes
++third_party/openmax_dl/dl/BUILD.gn unused
++third_party/libyuv/BUILD.gn:       yes
++third_party/libyuv/libyuv.gni:     yes
++third_party/pdfium/skia/BUILD.gn:  unused
+diff --git a/pi-util/README.txt b/pi-util/README.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..b5523d3301e2c9896466f0c5f1491c27dca25096
+--- /dev/null
++++ b/pi-util/README.txt
+@@ -0,0 +1,118 @@
++Release notes
++=============
++
++This version should run with gpu-mem=64 with the default switches. Having
++said that this will only allow for 1 stream.  If you are playing >1 stream
++(even transiently) then you will need more (say gpu_mem=128) and you will
++need to set the --mmal-decoders option to the desired max number. The code
++should give up cleanly if it cannot allocate a h/w video decoder and give
++the stream to old-style ffmpeg decode, but as it stands in many cases it
++thinks it has allocated a decoder cleanly only to find that it fails when
++it tries to use it.
++
++Needs a current (buster 2019-06-07+) firmware/userland
++
++There are a few command-line switches - in general you shouldn't use
++them!
++
++
++Decode and resizer options
++--------------------------
++
++--mmal-decode-opaque     Set the decoder to use opaque frames between
++decoder and resizer.  This should be faster than i420 but doesn't work
++with old firmware.  This is the default with newer firmware (>=
++2016-11-01). (see --mmal-decode-i420)
++
++--mmal-decode-i420       Set the decoder to use I420 frames between
++decoder and resizer.  This generates an unnecessary conversion but works
++with all firmware.  This is the default with older firmware (<
++2016-11-01). (see --mmal-decode-opaque)
++
++--mmal-low-delay         Force "low-delay" mode on the decoder pipe.  This
++reduces the number of buffered ES frames before the decoder.  It isn't
++exactly low-delay but is definitely lower than otherwise.  May have a
++slight performance penalty and increase the risk of stuttering.  This mode
++will be automatically set by Chrome for some streams.
++
++--mmal-resize-isp        Use ISP resize rather than resizer.  Is noticably
++faster but requires --mmal-frame-copy or --mmal-zero-copy and newer
++firmware.  This is the default with newer firmware  (>= 2016-11-01) and
++enough gpu memory to support --mmal-frame-copy.
++
++--mmal-resize-resizer    Use resizer rather than ISP. Slower than ISP
++resize but supports older firmware and --mmal-slice-copy which may be
++needed if GPU memory is very limited (as will be the case on a Pi1 with a
++default setup).
++
++--mmal-resize-mode=NEVER|ALWAYS|SMALLER
++Sets resize behaviour.
++  NEVER    Output is the native size of the video
++  ALWAYS   Output allways attempts to match the size of the displayed picture
++           This is normally the fastest mode for SHM-RGB copy
++  SMALLER  Resize to smaller of native & display. This saves memory and is
++           the fastest for EGL output
++
++
++Copy-modes
++----------
++
++--mmal-copy-mode=<copy mode>
++
++This sets the output frame type & mmal->chrome copy mode. Current values
++for <copy mode> are:
++
++slice                   slowest - uses only a small amount of memory
++                        in the resizer
++
++<alloc>-<format>-<copy>
++  <alloc>
++    SHM      Frame allocated from shared memory
++    GPU      Frame allocated from gpu memory
++  <format>
++    YUV      3-plane I420
++    YC       2-plane I420 e.g. NV12
++    RGB      1-plane 4-byte RGBX
++  <copy>
++    COPY     Data copied on the ARM.  This should be slower than DMA but
++             sometimes give more performance at the expense of slightly
++	     higher ARM CPU usage
++    DMA      Data copied by firmware DMA to ARM buffers.
++    ZC       Data put directly into GPU buffer.  Fastest - only works
++             with EGL (needs vcsm-cma).
++
++Currently valid combinations are:
++
++SHM-YUV-DMA
++SHM-YC-DMA
++SHM-RGB-DMA
++SHM-RGB-COPY  Default for non-gpu operation
++GPU-RGB-DMA
++GPU-RGB-ZC
++GPU-YUV-COPY
++GPU-YUV-ZC    Default for EGL operation
++
++
++Misc options
++------------
++
++--enable-logging=stderr This is a standard option for chrome but worth
++noting as the mmal code will print out its interpretation of the command
++line options passed to it along with how much GPU memory it has detected
++and the firmware date.
++
++--pi-patch-version       Print out the versions of Chromium and Pi
++patches.  Chrome will then terminate
++
++--mmal-decoders=<n>      Set the number of mmal decoders we wil try to
++create simultainiously. Default=1. If this number is exceeded then decoder
++init will fail and chrome will fallback to ffmpeg decode.  There is no
++panalty for setting this to a large number if you wish to have "unlimited"
++decoders.  However if it is set too big and there isn't the gpu mem to
++satisfy the requirements of the decode it may fail cleanly and revert to
++software (ffmpeg) decode or init may appear to succeed and decode then
++fails in an undefined manner.
++
++--mmal-frame-buffers=<n> Set the number of gpu "frame" buffers.
++Change with care.
++
+diff --git a/pi-util/cpbuild.sh b/pi-util/cpbuild.sh
+new file mode 100644
+index 0000000000000000000000000000000000000000..f34d8a7a1c5c5acc622f90c314664fb4f39d16ef
+--- /dev/null
++++ b/pi-util/cpbuild.sh
+@@ -0,0 +1,31 @@
++set -e
++if [ "$2" == "" ]; then
++  echo "mkzip <zipname> <out/dir>"
++  exit 1
++fi
++
++BASEDIR=`pwd`
++TMPBASE=$BASEDIR/out/tmp
++TMPDIRNAME=$1
++ZIPFILE=$1.zip
++OUTDIR=$BASEDIR/$2
++
++cd $OUTDIR
++D=$TMPBASE/$TMPDIRNAME
++rm -rf $D
++mkdir -p $D
++
++echo "=== Copying"
++cp -r * $D
++cd $D
++
++echo "=== Clean unwanted"
++find . -name obj -exec rm -rf {} +
++rm -rf gen clang_*
++rm -rf *.TOC *_deps *.zip core-* bin test_* toolchain.ninja third_party tools
++cd $TMPBASE
++
++echo "=== Zipping"
++zip -r -q $ZIPFILE $TMPDIRNAME
++
++echo "=== Done: $TMPBASE/$ZIPFILE"
+diff --git a/pi-util/cplibs.sh b/pi-util/cplibs.sh
+new file mode 100644
+index 0000000000000000000000000000000000000000..8cecc5c36bbf2a4fb4eabde7c8a4bb907d5b643c
+--- /dev/null
++++ b/pi-util/cplibs.sh
+@@ -0,0 +1,19 @@
++set -e
++
++FFNAME=libffmpeg_chrome.so.66
++LIBROOT=/usr/lib/arm-linux-gnueabihf
++
++if [ ! -d $LIBROOT ]; then
++  echo Can\'t find $LIBROOT
++  echo Are you sure you are running this on a Pi?
++  exit 1
++fi
++
++echo Copying $FFNAME from armv6/7 to $LIBROOT/...
++
++cp out/armv7/$FFNAME /tmp
++sudo cp /tmp/$FFNAME $LIBROOT/neon/vfp
++cp out/armv6/$FFNAME /tmp
++sudo cp /tmp/$FFNAME $LIBROOT
++
++
+diff --git a/pi-util/defargs_arm64-bullseye.gn b/pi-util/defargs_arm64-bullseye.gn
+new file mode 100644
+index 0000000000000000000000000000000000000000..2b55e62a72390c78d7595ce86b27bf7afbbac325
+--- /dev/null
++++ b/pi-util/defargs_arm64-bullseye.gn
+@@ -0,0 +1,16 @@
++# Build arguments go here. Examples:
++#   is_component_build = true
++#   is_debug = false
++# See "gn args <out_dir> --list" for available build arguments.
++target_cpu = "arm64"
++target_os = "linux"
++
++# Enables screen sharing in hangouts
++enable_hangout_services_extension = true
++
++# We have issues with the lib for this & it is probably for unittest only
++use_gnome_keyring = false
++
++ffmpeg_branding = "Chrome"
++proprietary_codecs = true
++
+diff --git a/pi-util/defargs_arm64.gn b/pi-util/defargs_arm64.gn
+new file mode 100644
+index 0000000000000000000000000000000000000000..960af0a0ef99fdfd8ce27ea2db8f1565a1a95f1a
+--- /dev/null
++++ b/pi-util/defargs_arm64.gn
+@@ -0,0 +1,21 @@
++# Build arguments go here. Examples:
++#   is_component_build = true
++#   is_debug = false
++# See "gn args <out_dir> --list" for available build arguments.
++target_cpu = "arm64"
++target_os = "linux"
++
++# We don't actually need this - v4l2 will do better (auto-set by gngen)
++media_use_mmal = false
++
++# Enables screen sharing in hangouts
++enable_hangout_services_extension = true
++
++# We have issues with the lib for this & it is probably for unittest only
++use_gnome_keyring = false
++# Buster pipewire is too early
++rtc_use_pipewire = false
++
++ffmpeg_branding = "Chrome"
++proprietary_codecs = true
++
+diff --git a/pi-util/defargs_armv6-bullseye.gn b/pi-util/defargs_armv6-bullseye.gn
+new file mode 100644
+index 0000000000000000000000000000000000000000..62eaffecbcf6a37dbbc6f2efe840548428d84bcb
+--- /dev/null
++++ b/pi-util/defargs_armv6-bullseye.gn
+@@ -0,0 +1,21 @@
++# See "gn args <out_dir> --list" for available build arguments.
++target_cpu = "arm"
++target_os = "linux"
++
++arm_float_abi = "hard"
++arm_use_neon = false
++arm_optionally_use_neon = false
++arm_version = 6
++arm_use_thumb = false
++arm_arch = "armv6z"
++
++# We want H.264 in ffmpeg
++ffmpeg_branding = "Chrome"
++proprietary_codecs = true
++
++# We have issues with the lib for this & it is probably for unittest only
++use_gnome_keyring = false
++
++# This crashes the compiler!
++#rtc_use_h264 = false
++
+diff --git a/pi-util/defargs_armv6.gn b/pi-util/defargs_armv6.gn
+new file mode 100644
+index 0000000000000000000000000000000000000000..d41811525a100574a5e5f9320705a30a57fa384f
+--- /dev/null
++++ b/pi-util/defargs_armv6.gn
+@@ -0,0 +1,35 @@
++# See "gn args <out_dir> --list" for available build arguments.
++target_cpu = "arm"
++target_os = "linux"
++
++arm_float_abi = "hard"
++arm_use_neon = false
++arm_optionally_use_neon = false
++arm_version = 6
++arm_use_thumb = false
++arm_arch = "armv6z"
++
++media_use_mmal = true
++
++# Separate out so we can have both arm v6 & v7 versions
++#is_component_ffmpeg = true
++
++# tcmalloc doesn't like armv6 by default
++#use_allocator = "none"
++
++# Could use system libjpeg but go with chromiums version
++# use_system_libjpeg = true
++#use_libjpeg_turbo = true
++
++# We have issues with the lib for this & it is probably for unittest only
++use_gnome_keyring = false
++# Buster pipewire is too early
++rtc_use_pipewire = false
++
++# We want H.264 in ffmpeg
++ffmpeg_branding = "Chrome"
++proprietary_codecs = true
++
++# This crashes the compiler!
++rtc_use_h264 = false
++
+diff --git a/pi-util/defargs_armv7-bullseye.gn b/pi-util/defargs_armv7-bullseye.gn
+new file mode 100644
+index 0000000000000000000000000000000000000000..e981838cd9410e3aaed13d5bbdc18768458ec276
+--- /dev/null
++++ b/pi-util/defargs_armv7-bullseye.gn
+@@ -0,0 +1,25 @@
++# Build arguments go here. Examples:
++#   is_component_build = true
++#   is_debug = false
++# See "gn args <out_dir> --list" for available build arguments.
++target_cpu = "arm"
++target_os = "linux"
++
++arm_float_abi = "hard"
++arm_use_neon = true
++# We have lib issues if we enable thumb
++arm_use_thumb = false
++arm_optionally_use_neon = false
++arm_version = 7
++arm_arch = "armv7-a"
++
++enable_widevine = true
++
++# Enables screen sharing in hangouts
++enable_hangout_services_extension = true
++
++# We have issues with the lib for this & it is probably for unittest only
++use_gnome_keyring = false
++
++ffmpeg_branding = "Chrome"
++proprietary_codecs = true
+diff --git a/pi-util/defargs_armv7.gn b/pi-util/defargs_armv7.gn
+new file mode 100644
+index 0000000000000000000000000000000000000000..cbaa397be3384ed0da9e60dafdc99fb02b6dda99
+--- /dev/null
++++ b/pi-util/defargs_armv7.gn
+@@ -0,0 +1,31 @@
++# Build arguments go here. Examples:
++#   is_component_build = true
++#   is_debug = false
++# See "gn args <out_dir> --list" for available build arguments.
++target_cpu = "arm"
++target_os = "linux"
++
++arm_float_abi = "hard"
++arm_use_neon = true
++# We have lib issues if we enable thumb
++arm_use_thumb = false
++arm_optionally_use_neon = false
++arm_version = 7
++arm_arch = "armv7-a"
++
++media_use_mmal = true
++enable_widevine = true
++
++# Enables screen sharing in hangouts
++enable_hangout_services_extension = true
++
++# We have issues with the lib for this & it is probably for unittest only
++use_gnome_keyring = false
++# Buster pipewire is too early
++rtc_use_pipewire = false
++
++#is_component_ffmpeg = true
++# tcmalloc doesn't like armv6 by default
++#use_allocator = "none"
++ffmpeg_branding = "Chrome"
++proprietary_codecs = true
+diff --git a/pi-util/dodiff.py b/pi-util/dodiff.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..bc15fc220215845f61d6f07795a6788b8d508341
+--- /dev/null
++++ b/pi-util/dodiff.py
+@@ -0,0 +1,35 @@
++#!/usr/bin/env python3
++
++import os, sys, string, subprocess
++
++# Local
++import gitscan, pipaths
++
++def doscan(outfile = sys.stdout):
++    revdict = gitscan.revdict()
++
++    cpath = gitscan.basepath()
++
++    for p in pipaths.pipaths:
++        os.chdir(os.path.join(cpath, p))
++        diff = subprocess.check_output(["git", "diff", revdict[p]], text=True)
++
++        header = False
++        lines = diff.split("\n")
++        # Remove terminal blank line
++        if lines[-1] == "":
++            lines.pop()
++        for line in lines:
++            if line.startswith("diff --git "):
++                header = True
++            if header:
++                line = line.replace(" a/", " a/" + p + "/")
++                line = line.replace(" b/", " b/" + p + "/")
++            if line.startswith("+++ "):
++                header = False
++            print(line, file=outfile)
++
++
++if __name__ == '__main__':
++    doscan()
++
+diff --git a/pi-util/gitscan.py b/pi-util/gitscan.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..6e93ae850476776a4cf1e406d74fc828994d3825
+--- /dev/null
++++ b/pi-util/gitscan.py
+@@ -0,0 +1,69 @@
++#!/usr/bin/env python3
++
++import os, string, subprocess, sys
++
++# Local
++import pipaths
++
++def revdict():
++    revdict = {'src':pipaths.src_commit}
++    stuff = subprocess.check_output(["gclient", "revinfo"], text=True)
++    for line in stuff.split("\n"):
++        pathn = line.find(":")
++        commitn = line.rfind("@")
++        if pathn != -1 and commitn != -1 :
++             revdict[line[:pathn]] = line[commitn+1:]
++    return revdict
++
++def basepath():
++    cpath = os.getcwd()
++    if not cpath.endswith("/src"):
++        raise "CWD doesn't end with /src"
++
++    return cpath[:-4]
++
++def gitscan(args, nosrc = False, quiet=False):
++    rv = 0
++
++    oldcwd = os.getcwd()
++    rdict = revdict()
++    cpath = basepath()
++
++    for p in pipaths.pipaths:
++        if nosrc and p == "src":
++            continue
++
++        os.chdir(os.path.join(cpath, p))
++
++        gitargs = [a.replace("{PATH}", p).replace("{BASE}", rdict[p]) for a in args]
++        gitargs[0:0] = ["git"]
++
++        if not quiet:
++            print(">>>", p)
++
++        rv = subprocess.call(gitargs)
++        if rv != 0:
++            if not quiet:
++                print("Git returned non-zero error code", rv, "\ncwd =", os.getcwd(), "\ncmd =", gitargs)
++            break
++
++    os.chdir(oldcwd)
++    return rv
++
++
++if __name__ == '__main__':
++
++    if len(sys.argv) < 2:
++        print("Usage: gitscan [--gitscan-no-src] <git cmd>")
++        print("  substitutes {PATH} and {BASE}")
++        exit(0)
++
++    nosrc = False
++
++    if sys.argv[1] == "--gitscan-no-src":
++        nosrc = True
++        del sys.argv[1]
++
++    gitscan(sys.argv[1:], nosrc)
++
++
+diff --git a/pi-util/gngen.py b/pi-util/gngen.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..62c498df6345325496825130e0f32f1e0d1e012f
+--- /dev/null
++++ b/pi-util/gngen.py
+@@ -0,0 +1,72 @@
++#!/usr/bin/env python3
++
++import os, ast, fileinput, subprocess, sys
++
++def docopy(name, vars, is_debug=False, is_ozone=False):
++    dir_suffix = ""
++    deb_str = "false"
++
++    if is_ozone:
++        ozone_str = "true"
++        dir_suffix = dir_suffix + "-ozone"
++    else:
++        ozone_str = "false"
++
++    if is_debug:
++        deb_str = "true"
++        dir_suffix = dir_suffix + "-deb"
++    else:
++        deb_str = "false"
++        dir_suffix = dir_suffix + "-rel"
++
++
++    dest_dir = os.path.join("out", name + dir_suffix)
++    src_file = os.path.join("pi-util", "defargs_" + name + ".gn")
++
++    # Ignore any errors making dir (in particular it already exists)
++    try:
++        os.makedirs(dest_dir)
++    except:
++        pass
++
++    dargs = open(os.path.join(dest_dir, "args.gn"), "wt")
++    dargs.write('# -- copied from: ' + src_file + '\n')
++
++    for line in fileinput.input(src_file):
++        dargs.write(line)
++
++    dargs.write('# -- created by ' + sys.argv[0] + '\n')
++    dargs.write('is_debug = ' + deb_str + '\n')
++    dargs.write('use_ozone = ' + ozone_str + '\n')
++    if is_ozone:
++        dargs.write('ozone_platform_x11 = true\n')
++        dargs.write('use_v4l2_codec = true\n')
++        dargs.write('use_v4l2_codec_rpi = true\n')
++
++    dargs.write('target_sysroot = "' + vars["target_sysroot"] + '"\n')
++    dargs.write('google_api_key = "' + vars["google_api_key"] + '"\n')
++    dargs.write('google_default_client_id = "' + vars["google_default_client_id"] + '"\n')
++    dargs.write('google_default_client_secret = "' + vars["google_default_client_secret"] + '"\n')
++
++    dargs.close()
++
++    subprocess.check_call(["gn", "gen", dest_dir])
++
++
++if __name__ == '__main__':
++    gyp_vars = {}
++    gypi = os.path.join(os.environ["HOME"], ".gyp", "include.gypi")
++    if os.path.isfile(gypi):
++        print("Importing from:", gypi)
++        gyps = open(gypi).read(-1)
++        gyp_vars = ast.literal_eval(gyps)["variables"]
++
++    gyp_vars["target_sysroot"] = os.path.abspath("build/linux/pios_bullseye_arm-sysroot")
++
++    docopy("armv6-bullseye", gyp_vars, is_ozone=True)
++    docopy("armv7-bullseye", gyp_vars, is_ozone=True)
++
++    gyp_vars["target_sysroot"] = os.path.abspath("build/linux/pios_bullseye_arm64-sysroot")
++
++    docopy("arm64-bullseye", gyp_vars, is_ozone=True)
++
+diff --git a/pi-util/makeall.sh b/pi-util/makeall.sh
+new file mode 100644
+index 0000000000000000000000000000000000000000..5fed29d0d1aa37ef99acb978487c5c6947c67ba9
+--- /dev/null
++++ b/pi-util/makeall.sh
+@@ -0,0 +1,47 @@
++set -e
++
++GET_BUILD_DEPS=
++if [ "$1" == "--build-deps" ]; then
++  GET_BUILD_DEPS=1
++  shift
++fi
++
++if [ "$1" == "" ]; then
++  echo "Usage: $0 [--build-deps] <git tag>"
++  exit 1
++fi
++
++echo === Check all committed
++pi-util/gitscan.py diff --name-status --exit-code
++echo === Reset third party libraries
++pi-util/gitscan.py --gitscan-no-src checkout {BASE}
++TAG=$1
++echo === Fetch chrome
++pi-util/gitscan.py fetch -t --all
++echo === Checkout chrome $TAG
++git checkout $TAG
++if [ ! $GET_BUILD_DEPS ]; then
++  echo === Skip system build dependancies
++else
++  echo === Get system build dependancies
++  build/install-build-deps.sh --arm
++fi
++echo === Sync third party libraries
++gclient sync -D --with_branch_heads
++# Shouldn't need this but the x bit often gets accidentally lost
++# due to core.filemode options
++chmod +x pi-util/*.sh pi-util/*.py
++echo === Checkout third party libraries
++pi-util/gitscan.py --gitscan-no-src checkout $TAG --
++echo === Get pi sysroots
++rm -rf out
++pi-util/rootgen.sh
++echo === Setup gn
++pi-util/gngen.py
++echo === Start build
++ninja -C out/armv7-ozone-rel chrome
++ninja -C out/arm64-ozone-rel chrome
++ninja -C out/armv6-ozone-rel chrome
++
++
++
+diff --git a/pi-util/mksyspatch.sh b/pi-util/mksyspatch.sh
+new file mode 100644
+index 0000000000000000000000000000000000000000..81edb1a81d345fb1601b65ad29759f1225656cdb
+--- /dev/null
++++ b/pi-util/mksyspatch.sh
+@@ -0,0 +1,18 @@
++#!/bin/bash -e
++
++SRC_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && cd .. && pwd )"
++TPATCH=/tmp/sysroot.patch
++PATCHFILE_PIOS=$SRC_DIR/pi-util/sysroot-pios.patch
++PATCHFILE_BULLSEYE=$SRC_DIR/pi-util/sysroot-bullseye.patch
++echo "Making: $PATCHFILE"
++
++cd $SRC_DIR
++diff -u build/linux/sysroot_scripts/sysroot-{creator,creator-pios}.sh > ${TPATCH} || true
++diff -u build/linux/sysroot_scripts/generate_{debian_archive_unstable,pios}_gpg.sh >> $TPATCH || true
++awk -f pi-util/patch2nd.awk $TPATCH > $PATCHFILE_PIOS
++diff -u build/linux/sysroot_scripts/sysroot-creator-{sid,pios-bullseye}.sh > $TPATCH || true
++awk -f pi-util/patch2nd.awk $TPATCH > $PATCHFILE_BULLSEYE
++
++echo "Done"
++
++
+diff --git a/pi-util/patch2nd.awk b/pi-util/patch2nd.awk
+new file mode 100644
+index 0000000000000000000000000000000000000000..74014a2d074d67773a1dff5ad6424b79cc0267f7
+--- /dev/null
++++ b/pi-util/patch2nd.awk
+@@ -0,0 +1,3 @@
++/^\-\-\-/  { next }
++/^\+\+\+/ { $1="---"; print; $1="+++"; }
++{ print }
+diff --git a/pi-util/pi-install-dev.sh b/pi-util/pi-install-dev.sh
+new file mode 100644
+index 0000000000000000000000000000000000000000..4eefca4c04c36452fef5fb03d269830bf175a28d
+--- /dev/null
++++ b/pi-util/pi-install-dev.sh
+@@ -0,0 +1,53 @@
++# Install set to build appropriate root on a clean pi
++
++APT=aptitude
++#APT=apt-get
++
++sudo $APT install \
++comerr-dev \
++libasound2-dev \
++libatk1.0-dev \
++libatk-bridge2.0-dev \
++libcap-dev \
++libcups2-dev \
++libexif-dev \
++libffi-dev \
++libgbm-dev \
++libgconf2-dev \
++libgl1-mesa-dev \
++libgles-dev \
++libgtk-3-dev \
++libjpeg-dev \
++libkrb5-dev \
++libnspr4-dev \
++libnss3-dev \
++libpam0g-dev \
++libpango1.0-dev \
++libpci-dev \
++libpcre3-dev \
++libpipewire-0.2-dev \
++libssl-dev \
++libudev-dev \
++libx11-xcb-dev \
++libxcb1-dev \
++libxcb-dri3-dev \
++libxcb-shm0-dev \
++libxcb-image0-dev \
++libxss-dev \
++libxt-dev \
++libxtst-dev \
++mesa-common-dev \
++python-xcbgen \
++uuid-dev \
++xcb-proto
++
++echo Also need python-xcbgen on host
++
++# Pulse (hopefully) disabled
++# libpulse-dev \
++
++# Obviously replace paths appropriately below
++# Now run pi-util/syncroot.sh on the compile m/c to grab the appropriate
++# bits of the root and fix up the paths.
++# e.g. ON COMPILE M/C in src dir:
++# pi-util/syncroot.sh my-pi: raspian_jessie_pi1
+diff --git a/pi-util/pipaths.py b/pi-util/pipaths.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..2a4a35538810376d55a8dac7a4f42f2e3b377225
+--- /dev/null
++++ b/pi-util/pipaths.py
+@@ -0,0 +1,9 @@
++pipaths=[
++    "src",
++    "src/native_client",
++    "src/third_party/ffmpeg",
++    "src/third_party/libyuv",
++    "src/third_party/skia"]
++
++# Our base tag or commit no
++src_commit="101.0.4951.57"
+diff --git a/pi-util/pipewire_utils_h.patch b/pi-util/pipewire_utils_h.patch
+new file mode 100644
+index 0000000000000000000000000000000000000000..9828c36981177b54aba3ddab0d4eac619658a70f
+--- /dev/null
++++ b/pi-util/pipewire_utils_h.patch
+@@ -0,0 +1,11 @@
++--- a/build/linux/raspian_stretch_pi1-sysroot/usr/include/pipewire/utils.h
+++++ b/build/linux/raspian_stretch_pi1-sysroot/usr/include/pipewire/utils.h
++@@ -52,7 +52,7 @@ static inline struct spa_pod *
++ pw_spa_pod_copy(const struct spa_pod *pod)
++ {
++       size_t size;
++-	struct spa_pod *c;
+++	void *c;
++
++       if (pod == NULL)
++           return NULL;
+diff --git a/pi-util/rebase_liblinks.py b/pi-util/rebase_liblinks.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..6a9a33fce217c394d968447f678cc558ffc8de8b
+--- /dev/null
++++ b/pi-util/rebase_liblinks.py
+@@ -0,0 +1,37 @@
++#!/usr/bin/env python
++
++import os, sys
++from stat import *
++
++def walktree(top, callback, n, prefix):
++    '''recursively descend the directory tree rooted at top,
++       calling the callback function for each regular file'''
++
++    for f in os.listdir(top):
++        pathname = os.path.join(top, f)
++        mode = os.lstat(pathname).st_mode
++        if S_ISDIR(mode):
++            # It's a directory, recurse into it
++            walktree(pathname, callback, n+1, prefix)
++        elif S_ISLNK(mode):
++            # It's a file, call the callback function
++            callback(pathname, os.readlink(pathname), n, prefix)
++
++def visitfile(file, linkname, n, prefix):
++    if (linkname.startswith(prefix + 'lib/')):
++        newlink = "../" * n + linkname[len(prefix):]
++        print 'relinking', file, "->", newlink
++        os.remove(file)
++        os.symlink(newlink, file)
++
++if __name__ == '__main__':
++    argc = len(sys.argv)
++    if argc == 2:
++        walktree(sys.argv[1], visitfile, 0, "/")
++    elif argc == 3:
++        walktree(sys.argv[1], visitfile, 0, sys.argv[2])
++    else:
++        print "rebase_liblinks.py <local root> [<old sysroot>]"
++
++
++
+diff --git a/pi-util/rootgen.sh b/pi-util/rootgen.sh
+new file mode 100644
+index 0000000000000000000000000000000000000000..787d3408e85ee8cefb01dd601222abc953ce7938
+--- /dev/null
++++ b/pi-util/rootgen.sh
+@@ -0,0 +1,37 @@
++#!/bin/bash -e
++
++SRC_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && cd .. && pwd )"
++
++NOPATCH=
++if [ "$1" == "--nopatch" ]; then
++  NOPATCH=1
++  shift
++fi
++
++if [ "$1" != "" ]; then
++  echo "Usage: $0 [--nopatch]"
++  exit 1
++fi
++
++if [ ! $NOPATCH ]; then
++  cd $SRC_DIR
++  cp -v build/linux/sysroot_scripts/sysroot-{creator,creator-pios}.sh
++  cp -v build/linux/sysroot_scripts/sysroot-creator-{sid,pios-bullseye}.sh
++  cp -v build/linux/sysroot_scripts/generate_{debian_archive_unstable,pios}_gpg.sh
++  patch -p0 < pi-util/sysroot-pios.patch
++  patch -p0 < pi-util/sysroot-bullseye.patch
++fi
++
++rm -rf $SRC_DIR/build/linux/sysroot_scripts/pios_archive.gpg $SRC_DIR/build/linux/pios_*-sysroot
++rm -rf $SRC_DIR/out/sysroot-build
++
++cd $SRC_DIR/build/linux/sysroot_scripts
++./generate_pios_gpg.sh
++./sysroot-creator-pios-bullseye.sh BuildSysrootARM
++./sysroot-creator-pios-bullseye.sh BuildSysrootARM64
++mkdir -pv ../pios_bullseye_{arm,arm64}-sysroot
++cd ../pios_bullseye_arm-sysroot
++bsdtar xf ../../../out/sysroot-build/bullseye/pios_bullseye_arm_sysroot.tar.xz
++cd ../pios_bullseye_arm64-sysroot
++bsdtar xf ../../../out/sysroot-build/bullseye/pios_bullseye_arm64_sysroot.tar.xz
++
+diff --git a/pi-util/settag.py b/pi-util/settag.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..8f435b7682990fa93c3356f7123e136c9fb0f24d
+--- /dev/null
++++ b/pi-util/settag.py
+@@ -0,0 +1,60 @@
++#!/usr/bin/env python3
++
++import sys, os, subprocess
++
++# Local
++import pipaths
++import gitscan
++import dodiff
++import argparse
++
++def set_version(verstr):
++    pathname = "components/version_info/pi_patch_version_values.h"
++
++    with open(pathname, "wt") as f:
++        f.write("// Pi patch version - generated by pi-util/settag.py\n")
++        f.write('#define PI_PATCH_VERSION_STRING "' + verstr + '"\n')
++
++    subprocess.check_call(["git", "add", pathname])
++    subprocess.check_call(["git", "commit", "-m", "Update pi patch version to " + verstr])
++
++
++def set_tag(verstr):
++    newtag = "pi/" + pipaths.src_commit + "/" + verstr
++    print("Setting tag: " + newtag)
++    if gitscan.gitscan(["tag", newtag], quiet=True) != 0:
++        print("Tagging failed")
++        sys.exit(1)
++
++def set_tag_and_version(verstr):
++    set_version(verstr)
++    set_tag(verstr)
++
++if __name__ == '__main__':
++    argp = argparse.ArgumentParser(
++        description="Sets version info in pi_patch_version_values & tags source tree with it")
++    argp.add_argument("-p", action='store_true', help="Generate patch file")
++    argp.add_argument("verstr", help="Pi patch version string")
++    args = argp.parse_args()
++
++    patchpath = os.path.join("..", "v" + pipaths.src_commit + "_" + args.verstr + ".patch")
++
++    if args.p and os.path.exists(patchpath):
++        print("Patchfile", patchpath, "already exists")
++        sys.exit(1)
++
++    print("-- Checking all committed")
++    if gitscan.gitscan(["diff", "--name-status", "--exit-code"], quiet=True) != 0:
++        print("Status check failed - commit everything and try again")
++        sys.exit(1)
++
++    print("-- Generating & committing pi_patch_version_values.h")
++    set_version(args.verstr)
++    print("-- Generating tags")
++    set_tag(args.verstr)
++
++    if args.p:
++        print("-- Generating patch file: ", patchpath)
++        with open(patchpath, "wt") as f:
++            dodiff.doscan(f)
++
+diff --git a/pi-util/syncroot.sh b/pi-util/syncroot.sh
+new file mode 100644
+index 0000000000000000000000000000000000000000..a5f7c3fc1394340868c2fe8f57c8c4f2f62a5b37
+--- /dev/null
++++ b/pi-util/syncroot.sh
+@@ -0,0 +1,70 @@
++set -e
++
++NEEDSVC=1
++TYPE=arm
++API=arm-linux-gnueabihf
++SYSROOT_DEFAULT=pios_buster_arm
++
++if [ "$1" == "--arm64" ]; then
++  shift
++  TYPE=arm64
++  NEEDSVC=
++  API=aarch64-linux-gnu
++  SYSROOT_DEFAULT=pios_buster_arm64
++fi
++
++if [ "$1" == "" ]; then
++  echo Usage: $0 [--arm64] \<src_dir\> [\<rootname\>]
++  echo src_dir is a source for rsync so may contain m/c name.
++  echo rootname will be set to \"pios_buster_arm\" if missing
++  echo e.g.: pi-util/syncroot.sh my-pi:
++  exit 1
++fi
++
++SYSROOT_NAME=$2
++if [ "$SYSROOT_NAME" == "" ]; then
++  SYSROOT_NAME=$SYSROOT_DEFAULT
++fi
++
++DST_ROOT=`gclient root`
++DST=$DST_ROOT/src/build/linux/$SYSROOT_NAME-sysroot
++SRC=$1
++
++if [ ! -d $DST_ROOT/src/build/linux ]; then
++  echo We don\'t appear to be in a Chrome build tree
++  exit 1
++fi
++
++echo Copying root for $TYPE
++echo Sync src:  $SRC
++echo Sync dest: $DST
++
++mkdir -p $DST/lib
++mkdir -p $DST/opt/vc/include
++mkdir -p $DST/usr/lib/pkgconfig
++mkdir -p $DST/usr/bin
++mkdir -p $DST/usr/share
++
++rsync -rl $SRC/lib $DST
++if [ $NEEDSVC ]; then
++  #### MUST NOT include /opt/vc/include/*GL*
++  # Creates conflicts with GL includes inside Chrome
++  rsync -rl $SRC/opt/vc/lib $DST/opt/vc
++  rsync -rl $SRC/opt/vc/include/interface $DST/opt/vc/include
++fi
++rsync -rl --exclude cups/backend $SRC/usr/lib $DST/usr
++rsync -rl $SRC/usr/include $DST/usr
++rsync -rl $SRC/usr/share/pkgconfig $DST/usr/share
++rsync -rl $SRC/usr/share/xcb $DST/usr/share
++rsync -rl $SRC/usr/bin/cups-config $DST/usr/bin
++
++# Fix up pipewire issue
++if [ -e $DST/usr/include/pipewire/utils.h ]; then
++  sed 's/struct spa_pod \*c/void \* c/' < $DST/usr/include/pipewire/utils.h > u.h
++  mv u.h $DST/usr/include/pipewire/utils.h
++fi
++
++cd $DST/usr/lib/pkgconfig
++ln -sf ../$API/pkgconfig/* .
++cd ../../../../../..
++pi-util/rebase_liblinks.py $DST
+diff --git a/pi-util/sysroot-bullseye.patch b/pi-util/sysroot-bullseye.patch
+new file mode 100644
+index 0000000000000000000000000000000000000000..da8e8c367d55631c2371c3be232731923921cf91
+--- /dev/null
++++ b/pi-util/sysroot-bullseye.patch
+@@ -0,0 +1,169 @@
++--- build/linux/sysroot_scripts/sysroot-creator-pios-bullseye.sh 2022-04-11 11:34:24.344323959 +0100
+++++ build/linux/sysroot_scripts/sysroot-creator-pios-bullseye.sh 2022-04-11 11:34:24.344323959 +0100
++@@ -5,8 +5,8 @@
++
++ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
++
++-DISTRO=debian
++-DIST=sid
+++DISTRO=pios
+++DIST=bullseye
++
++ # Keep the "experimental" repo before the "sid" repo.  There are some packages
++ # that are currently only available in experimental like libgtk-4-1, but if it
++@@ -18,22 +18,34 @@
++ # libgnome-keyring-dev which has since been deprecated and removed from sid.
++ # It will be needed until gnome keyring is removed (http://crbug.com/466975 and
++ # http://crbug.com/355223).
++-ARCHIVE_URL="https://snapshot.debian.org/archive/debian"
++-ARCHIVE_TIMESTAMP=20210819T144544Z
++-APT_SOURCES_LIST="${ARCHIVE_URL}/${ARCHIVE_TIMESTAMP}/ stretch main
++-${ARCHIVE_URL}/${ARCHIVE_TIMESTAMP}/ experimental main
++-${ARCHIVE_URL}/${ARCHIVE_TIMESTAMP}/ sid main"
+++ARCHIVE_TIMESTAMP=latest
+++
+++if [ "$1" = "BuildSysrootARM" ]; then
+++    ARCHIVE_URL="http://snapshot.raspbian.org/"
+++    APT_SOURCES_LIST="${ARCHIVE_URL}/${ARCHIVE_TIMESTAMP}/raspbian/ $DIST main contrib non-free rpi
+++http://archive.raspberrypi.org/debian/ $DIST main"
+++    HAS_ARCH_ARM=1
+++    HAS_ARCH_ARM64=0
+++elif [ "$1" = "BuildSysrootARM64" ]; then
+++    ARCHIVE_URL="http://deb.debian.org/debian/"
+++    APT_SOURCES_LIST="${ARCHIVE_URL} $DIST main contrib non-free
+++http://deb.debian.org/debian $DIST-updates main contrib non-free
+++http://archive.raspberrypi.org/debian/ $DIST main"
+++    HAS_ARCH_ARM=0
+++    HAS_ARCH_ARM64=1
+++else
+++    echo "Please run with either BuildSysrootARM64 or BuildSysrootARM"
+++    exit 1
+++fi
++
++ # gpg keyring file generated using generate_debian_archive_unstable.sh
++-KEYRING_FILE="${SCRIPT_DIR}/debian_archive_unstable.gpg"
+++KEYRING_FILE="${SCRIPT_DIR}/pios_archive.gpg"
++
++-HAS_ARCH_AMD64=1
++-HAS_ARCH_I386=1
++-HAS_ARCH_ARM=1
++-HAS_ARCH_ARM64=1
++-HAS_ARCH_ARMEL=1
++-HAS_ARCH_MIPS=1
++-HAS_ARCH_MIPS64EL=1
+++HAS_ARCH_AMD64=0
+++HAS_ARCH_I386=0
+++HAS_ARCH_ARMEL=0
+++HAS_ARCH_MIPS=0
+++HAS_ARCH_MIPS64EL=0
++
++ # Sysroot packages: these are the packages needed to build chrome.
++ # NOTE: When DEBIAN_PACKAGES is modified, the packagelist files must be updated
++@@ -41,10 +53,6 @@
++ DEBIAN_PACKAGES="\
++   comerr-dev
++   krb5-multidev
++-  libappindicator-dev
++-  libappindicator1
++-  libappindicator3-1
++-  libappindicator3-dev
++   libasound2
++   libasound2-dev
++   libasyncns0
++@@ -115,9 +123,7 @@
++   libexpat1
++   libexpat1-dev
++   libffi-dev
++-  libffi6
++   libffi7
++-  libffi8
++   libflac-dev
++   libflac8
++   libfontconfig-dev
++@@ -129,7 +135,7 @@
++   libgbm-dev
++   libgbm1
++   libgcc-10-dev
++-  libgcc1
+++  libgcc-s1
++   libgcrypt20
++   libgcrypt20-dev
++   libgdk-pixbuf-2.0-0
++@@ -149,8 +155,6 @@
++   libglx-dev
++   libglx0
++   libgmp10
++-  libgnome-keyring-dev
++-  libgnome-keyring0
++   libgnutls-dane0
++   libgnutls-openssl27
++   libgnutls28-dev
++@@ -180,8 +184,6 @@
++   libidl-2-0
++   libidn11
++   libidn2-0
++-  libindicator3-7
++-  libindicator7
++   libinput-dev
++   libinput10
++   libjbig-dev
++@@ -244,7 +246,6 @@
++   libpcre2-32-0
++   libpcre2-8-0
++   libpcre2-dev
++-  libpcre2-posix0
++   libpcre2-posix2
++   libpcre3
++   libpcre3-dev
++@@ -389,10 +390,7 @@
++   shared-mime-info
++   uuid-dev
++   wayland-protocols
++-  x11proto-composite-dev
++-  x11proto-damage-dev
++   x11proto-dev
++-  x11proto-fixes-dev
++   x11proto-input-dev
++   x11proto-kb-dev
++   x11proto-randr-dev
++@@ -432,8 +430,8 @@
++   libdrm-freedreno1
++   libdrm-omap1
++   libdrm-tegra0
++-  libgtk-4-1
++-  libgtk-4-dev
+++  libraspberrypi0
+++  libraspberrypi-dev
++   libubsan1
++   valgrind
++ "
++@@ -444,10 +442,10 @@
++   libdrm-freedreno1
++   libdrm-tegra0
++   libgmp10
++-  libgtk-4-1
++-  libgtk-4-dev
++   libitm1
++   liblsan0
+++  libraspberrypi0
+++  libraspberrypi-dev
++   libthai0
++   libtsan0
++   libubsan1
++@@ -460,13 +458,13 @@
++   libdrm-freedreno1
++   libdrm-omap1
++   libdrm-tegra0
++-  libgtk-4-1
++-  libgtk-4-dev
++   libubsan1
+++  libraspberrypi0
+++  libraspberrypi-dev
++ "
++
++ DEBIAN_PACKAGES_MIPS64EL="
++   valgrind
++ "
++
++-. "${SCRIPT_DIR}/sysroot-creator.sh"
+++. "${SCRIPT_DIR}/sysroot-creator-pios.sh"
+diff --git a/pi-util/sysroot-pios.patch b/pi-util/sysroot-pios.patch
+new file mode 100644
+index 0000000000000000000000000000000000000000..a711969bec43c5267fd220f5315e1cd00b3c2d12
+--- /dev/null
++++ b/pi-util/sysroot-pios.patch
+@@ -0,0 +1,131 @@
++--- build/linux/sysroot_scripts/sysroot-creator-pios.sh 2022-04-11 11:34:24.340323908 +0100
+++++ build/linux/sysroot_scripts/sysroot-creator-pios.sh 2022-04-11 11:34:24.340323908 +0100
++@@ -58,7 +58,7 @@
++ # Package Config
++ ######################################################################
++
++-readonly PACKAGES_EXT=xz
+++readonly PACKAGES_EXTS="gz xz"
++ readonly RELEASE_FILE="Release"
++ readonly RELEASE_FILE_GPG="Release.gpg"
++
++@@ -125,7 +125,7 @@
++     local temp_file="${2}.partial.$$"
++     # curl --retry doesn't retry when the page gives a 4XX error, so we need to
++     # manually rerun.
++-    for i in {1..10}; do
+++    for i in {1..2}; do
++       # --create-dirs is added in case there are slashes in the filename, as can
++       # happen with the "debian/security" release class.
++       local http_code=$(curl -L "$1" --create-dirs -o "${temp_file}" \
++@@ -138,7 +138,7 @@
++       sleep $i
++     done
++     if [ ! -f "${temp_file}" ]; then
++-      exit 1
+++      return 1
++     fi
++     mv "${temp_file}" $2
++   else
++@@ -230,7 +230,16 @@
++   local src_file="$1"
++   local dst_file="$2"
++   local repo="$3"
++-  xzcat "${src_file}" | egrep '^(Package:|Filename:|SHA256:) ' |
+++  local cat_tool
+++  if [ "$PACKAGES_EXT" == "xz" ]; then
+++    cat_tool="xzcat"
+++  elif [ "$PACKAGES_EXT" == "gz" ]; then
+++    cat_tool="zcat"
+++  else
+++    echo "ERROR: No tool to 'cat' archive type: $PACKAGES_EXT"
+++    exit 1
+++  fi
+++  "$cat_tool" "${src_file}" | egrep '^(Package:|Filename:|SHA256:) ' |
++     sed "s|Filename: |Filename: ${repo}|" > "${dst_file}"
++ }
++
++@@ -243,13 +252,20 @@
++
++   TMP_PACKAGE_LIST="${BUILD_DIR}/Packages.${dist}_${repo_name}_${arch}"
++   local repo_basedir="${repo}/dists/${dist}"
++-  local package_list="${BUILD_DIR}/Packages.${dist}_${repo_name}_${arch}.${PACKAGES_EXT}"
++-  local package_file_arch="${repo_name}/binary-${arch}/Packages.${PACKAGES_EXT}"
++-  local package_list_arch="${repo_basedir}/${package_file_arch}"
++-
++-  DownloadOrCopyNonUniqueFilename "${package_list_arch}" "${package_list}"
++-  VerifyPackageListing "${package_file_arch}" "${package_list}" ${repo} ${dist}
++-  ExtractPackageXz "${package_list}" "${TMP_PACKAGE_LIST}" ${repo}
+++  for PACKAGES_EXT in $PACKAGES_EXTS FAIL; do
+++    local package_list="${BUILD_DIR}/Packages.${dist}_${repo_name}_${arch}.${PACKAGES_EXT}"
+++    local package_file_arch="${repo_name}/binary-${arch}/Packages.${PACKAGES_EXT}"
+++    local package_list_arch="${repo_basedir}/${package_file_arch}"
+++
+++    DownloadOrCopyNonUniqueFilename "${package_list_arch}" "${package_list}" || continue
+++    VerifyPackageListing "${package_file_arch}" "${package_list}" ${repo} ${dist}
+++    ExtractPackageXz "${package_list}" "${TMP_PACKAGE_LIST}" ${repo}
+++    break
+++  done
+++  if [ "$PACKAGES_EXT" == "FAIL" ]; then
+++    echo "ERROR: Command failed: $0 $@"
+++    exit 1
+++  fi
++ }
++
++ GeneratePackageListCommon() {
++@@ -384,6 +400,18 @@
++   mkdir -p ${INSTALL_ROOT}/usr/lib/pkgconfig
++   mv ${INSTALL_ROOT}/usr/lib/${arch}-${os}/pkgconfig/* \
++       ${INSTALL_ROOT}/usr/lib/pkgconfig
+++
+++  # Temporary workaround for invalid implicit conversion from void* in pipewire.
+++  # This is already fixed upstream in [1], so this can be removed once it rolls
+++  # into Debian.
+++  # [1] https://github.com/PipeWire/pipewire/commit/371da358d1580dc06218d18a12a99611cac39e4e
+++  # buster uses 0.2 bullseye 0.3 - the offending file doesn't exist in 0.3
+++  local pipewire_utils_h="${INSTALL_ROOT}/usr/include/pipewire/utils.h"
+++  if [ -e ${pipewire_utils_h} ]; then
+++    sed -i 's/malloc/(struct spa_pod*)malloc/' "${pipewire_utils_h}"
+++  fi
+++
+++  rm -rf "${INSTALL_ROOT}/opt/vc/include/"*GL*
++ }
++
++
++@@ -865,14 +893,14 @@
++   shift
++   shift
++   for pkg in $@ ; do
++-    local pkg_full=$(grep -A 1 " ${pkg}\$" "$input_file" | \
++-      egrep "pool/.*" | sed 's/.*Filename: //')
+++    local pkg_full=$(grep -A 2 " ${pkg}\$" "$input_file" | \
+++      egrep -m1 "pool/.*" | sed 's/.*Filename: //')
++     if [ -z "${pkg_full}" ]; then
++         echo "ERROR: missing package: $pkg"
++         exit 1
++     fi
++     local sha256sum=$(grep -A 4 " ${pkg}\$" "$input_file" | \
++-      grep ^SHA256: | sed 's/^SHA256: //')
+++      grep -m1 ^SHA256: | sed 's/^SHA256: //')
++     if [ "${#sha256sum}" -ne "64" ]; then
++       echo "Bad sha256sum from Packages"
++       exit 1
++--- build/linux/sysroot_scripts/generate_pios_gpg.sh 2022-04-11 11:34:24.340323908 +0100
+++++ build/linux/sysroot_scripts/generate_pios_gpg.sh 2022-04-11 11:34:24.340323908 +0100
++@@ -9,6 +9,10 @@
++ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
++
++ KEYS=(
+++    # Raspbian
+++    "A0DA38D0D76E8B5D638872819165938D90FDDD2E"
+++    # Raspberry Pi OS
+++    "CF8A1AF502A2AA2D763BAE7E82B129927FA3303E"
++     # Debian Archive Automatic Signing Key (11/bullseye)
++     "73A4F27B8DD47936"
++     # Debian Security Archive Automatic Signing Key (11/bullseye)
++@@ -38,4 +42,4 @@
++ )
++
++ gpg --keyserver keyserver.ubuntu.com --recv-keys ${KEYS[@]}
++-gpg --output "${SCRIPT_DIR}/debian_archive_unstable.gpg" --export ${KEYS[@]}
+++gpg --output "${SCRIPT_DIR}/pios_archive.gpg" --export ${KEYS[@]}
+diff --git a/sandbox/policy/linux/bpf_gpu_policy_linux.cc b/sandbox/policy/linux/bpf_gpu_policy_linux.cc
+index 35ccbb7a7f82b13164a2e30a04a35a5c0ed76138..3097e8d104ef10bd9f6c1bf2b39a1766bd1f0e27 100644
+--- a/sandbox/policy/linux/bpf_gpu_policy_linux.cc
++++ b/sandbox/policy/linux/bpf_gpu_policy_linux.cc
+@@ -84,6 +84,27 @@ ResultExpr GpuProcessPolicy::EvaluateSyscall(int sysno) const {
+     // (MAP_LOCKED | MAP_EXECUTABLE | MAP_32BIT)
+     case __NR_mmap:
+       return Allow();
++#endif
++#if defined(USE_X11) || 1
++    // Wanted for MESA to fire up happily
++    // *** Should almost certainly arrange for the offending setup
++    //     to happen before sandbox is applied but I can't work out
++    //     what is needed
++    // Alternatively --in-process-gpu fixes the issue
++#ifdef __NR_readlink
++    case __NR_readlink:  // 85
++#else
++    case __NR_readlinkat:
++#endif
++#ifdef __NR_stat64
++    case __NR_stat64:    // 195
++#endif
++    case __NR_openat:    // 322 --- This one is clearly bad!
++    // V4L2 requires open/close - not sure how this works in chromeos without the holes
++#ifdef __NR_open
++    case __NR_open:
++#endif
++    case __NR_close:
+ #endif
+     // We also hit this on the linux_chromeos bot but don't yet know what
+     // weird flags were involved.
+diff --git a/third_party/libdrm/BUILD.gn b/third_party/libdrm/BUILD.gn
+index ce943e1e327fd20df23fbdaa0057ef9ede3b10e7..ad073d72ff6f58688ff39492b552bd15da8e8ad9 100644
+--- a/third_party/libdrm/BUILD.gn
++++ b/third_party/libdrm/BUILD.gn
+@@ -72,6 +72,7 @@ static_library("libdrm") {
+     # glibc-2.24.  This causes a build error when using the Debian
+     # Stretch sysroot.
+     "-Wno-deprecated-declarations",
++    "-DMAJOR_IN_SYSMACROS=1",
+   ]
+ 
+   public_configs = [ ":libdrm_config" ]
+diff --git a/third_party/widevine/cdm/widevine.gni b/third_party/widevine/cdm/widevine.gni
+index 45e984205885f8e29e7e63b70f87873aa5c44072..83d7ffcab813dddf26fefdadd8a1576b1378543a 100644
+--- a/third_party/widevine/cdm/widevine.gni
++++ b/third_party/widevine/cdm/widevine.gni
+@@ -26,7 +26,7 @@ if (is_chromeos && !is_chromeos_device) {
+ library_widevine_cdm_available =
+     (is_chromeos &&
+      (target_cpu == "x64" || target_cpu == "arm" || target_cpu == "arm64")) ||
+-    (target_os == "linux" && target_cpu == "x64") ||
++    (target_os == "linux" && (target_cpu == "x64" || target_cpu == "arm")) ||
+     (target_os == "mac" && (target_cpu == "x64" || target_cpu == "arm64")) ||
+     (target_os == "win" &&
+      (target_cpu == "x86" || target_cpu == "x64" || target_cpu == "arm64"))
+diff --git a/ui/gl/init/gl_factory.cc b/ui/gl/init/gl_factory.cc
+index 797ee453741e78c16e349e095402419c3b1742c2..b727dce14068113fca57244b854d243cb2b33961 100644
+--- a/ui/gl/init/gl_factory.cc
++++ b/ui/gl/init/gl_factory.cc
+@@ -111,6 +111,15 @@ GLImplementationParts GetRequestedGLImplementation(
+   absl::optional<GLImplementationParts> impl_from_cmdline =
+       GetRequestedGLImplementationFromCommandLine(cmd, fallback_to_software_gl);
+ 
++  // RPI: We always want EGL as our preferred render
++  // Easiest to simply add here - angle + GLES +/- EGL crashes
++  // so add here after the angle add.
++  //
++  // BEWARE: falling back from EGL to anything else with --in-process-gpu
++  // set produces a segfault when we exit so ideally we would only do this
++  // on Pi4/(F)KMS?
++  allowed_impls.insert(allowed_impls.begin(), GLImplementationParts(kGLImplementationEGLGLES2));
++
+   // The default implementation is always the first one in list.
+   if (!impl_from_cmdline)
+     return allowed_impls[0];
